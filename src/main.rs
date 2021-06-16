@@ -9,7 +9,7 @@ use reqwest::blocking::Client;
 use rust_decimal::prelude::Decimal;
 use std::{env, io};
 
-mod data;
+mod history;
 mod exchange;
 mod fxcm;
 mod trader;
@@ -87,7 +87,7 @@ fn main() -> fxcm::Result<()> {
     } else {
         let rdr: &mut dyn Iterator<Item = fxcm::FallibleCandle> = if opts.replay {
             let client = Client::new();
-            history = Some(data::History::new(
+            history = Some(history::History::new(
                 move |url| Ok(client.get(url).send()?),
                 opts.begin,
                 opts.end,
