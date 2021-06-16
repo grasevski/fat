@@ -1,0 +1,24 @@
+[package]
+name = "fat"
+version = "0.1.0"
+authors = ["Nicholas Grasevski <grasevski@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+arrayvec = "*"
+chrono = { features = ["serde"], version = "*" }
+clap = "3.0.0-beta.2"
+csv = "*"
+humantime = "*"
+enum-map = "*"
+flate2 = "*"
+heapless = "*"
+num-derive = "*"
+num-traits = "*"
+rust_decimal = "*"
+reqwest = { features = ["blocking", "rustls-tls"], version = "*" }
+serde = { features = ["derive"], version = "*" }
+strum = "*"
+strum_macros = "*"
