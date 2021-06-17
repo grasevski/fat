@@ -117,7 +117,7 @@ impl<W: Write, E: Exchange> Iterator for Logging<W, E> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let ret = self.exchange.next();
-        if let Some(Ok(ref r)) = ret {
+        if let Some(Ok(fxcm::Event::Candle(ref r))) = ret {
             if let Err(e) = self.dst.serialize(r) {
                 return Some(Err(fxcm::Error::from(e)));
             }
@@ -307,7 +307,7 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Iterator for Sim<S> {
             self.candle = None;
             Some(Ok(fxcm::Event::Candle(candle)))
         } else if let Some(order) = self.orders.dequeue() {
-            return self.trade(order);
+            self.trade(order)
         } else {
             None
         }

@@ -5,28 +5,28 @@ use chrono::{Datelike, Duration, NaiveDate};
 use csv::{DeserializeRecordsIntoIter, Reader};
 use enum_map::EnumMap;
 use flate2::read::GzDecoder;
-use num_traits::FromPrimitive;
-use std::{convert::TryFrom, fmt::Write, io::Read};
+use std::{fmt::Write, io::Read};
 
 /// Iterator to get historical data for all symbols.
 pub struct History<R: Read, F: FnMut(&str) -> fxcm::Result<R>> {
-    ix: i8,
     client: F,
-    buf: EnumMap<fxcm::Symbol, Option<HistoryLoader<R>>>,
+    buf: EnumMap<fxcm::Symbol, (Option<fxcm::Candle>, Option<HistoryLoader<R>>)>,
 }
 
 impl<R: Read, F: FnMut(&str) -> fxcm::Result<R>> History<R, F> {
     /// Initializes data loader for given date range.
-    pub fn new(client: F, begin: NaiveDate, end: Option<NaiveDate>) -> Self {
+    pub fn new(mut client: F, begin: NaiveDate, end: Option<NaiveDate>) -> fxcm::Result<Self> {
         let mut buf = EnumMap::default();
-        for (k, v) in &mut buf {
-            *v = Some(HistoryLoader::new(k, begin, end));
+        for (k, (candle, loader)) in &mut buf {
+            let mut l = HistoryLoader::new(k, begin, end);
+            if let Some(c) = l.next(&mut client) {
+                *candle = Some(c?);
+                *loader = Some(l);
+            } else {
+                *loader = None;
+            }
         }
-        Self {
-            ix: Default::default(),
-            client,
-            buf,
-        }
+        Ok(Self { client, buf })
     }
 }
 
@@ -34,22 +34,28 @@ impl<R: Read, F: FnMut(&str) -> fxcm::Result<R>> Iterator for History<R, F> {
     type Item = fxcm::FallibleCandle;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(ix) = FromPrimitive::from_i8(self.ix) {
-            if let Some(ref mut loader) = self.buf[ix] {
-                let ret = loader.next(&mut self.client);
-                self.ix += 1;
-                match i8::try_from(self.buf.len()) {
-                    Ok(x) => {
-                        self.ix %= x;
-                        ret
+        if let Some(candle) = self.buf.values().flat_map(|x| x.0).min() {
+            let (ref mut c, ref mut l) = self.buf[candle.symbol];
+            if let Some(loader) = l {
+                if let Some(x) = loader.next(&mut self.client) {
+                    match x {
+                        Ok(x) => {
+                            *c = Some(x);
+                        }
+                        Err(err) => {
+                            return Some(Err(err));
+                        }
                     }
-                    Err(x) => Some(Err(fxcm::Error::from(x))),
+                } else {
+                    *c = None;
+                    *l = None;
                 }
             } else {
-                Some(Err(fxcm::Error::Initialization))
+                *c = None;
             }
+            Some(Ok(candle))
         } else {
-            Some(Err(fxcm::Error::IndexOutOfBounds(self.ix)))
+            None
         }
     }
 }
@@ -58,7 +64,7 @@ struct HistoryLoader<R: Read> {
     symbol: fxcm::Symbol,
     current: NaiveDate,
     end: Option<NaiveDate>,
-    rdr: Option<DeserializeRecordsIntoIter<GzDecoder<R>, fxcm::Candle>>,
+    rdr: Option<DeserializeRecordsIntoIter<GzDecoder<R>, fxcm::Historical>>,
 }
 
 impl<R: Read> HistoryLoader<R> {
@@ -89,7 +95,7 @@ impl<R: Read> HistoryLoader<R> {
             let mut url = ArrayString::<64>::new();
             if let Err(err) = write!(
                 &mut url,
-                "{}/{:?}/{}/{}.csv.gz",
+                "{}/{}/{}/{}.csv.gz",
                 ENDPOINT, self.symbol, year, week
             ) {
                 return Some(Err(fxcm::Error::from(err)));
@@ -108,26 +114,29 @@ impl<R: Read> HistoryLoader<R> {
         if let Some(rdr) = &mut self.rdr {
             if let Some(candle) = rdr.next() {
                 match candle {
-                    Ok(mut ret) => {
-                        let t = ret.ts.naive_utc().date();
-                        if t >= self.current {
-                            ret.symbol = self.symbol;
-                            if let Some(end) = self.end {
-                                if t < end {
-                                    Some(Ok(ret))
+                    Ok(candle) => match fxcm::Candle::new(self.symbol, candle) {
+                        Ok(candle) => {
+                            let t = candle.ts.naive_utc().date();
+                            if t >= self.current - Duration::weeks(1) {
+                                if let Some(end) = self.end {
+                                    if t < end {
+                                        Some(Ok(candle))
+                                    } else {
+                                        None
+                                    }
                                 } else {
-                                    None
+                                    Some(Ok(candle))
                                 }
                             } else {
-                                Some(Ok(ret))
+                                None
                             }
-                        } else {
-                            None
                         }
-                    }
+                        Err(err) => Some(Err(err)),
+                    },
                     Err(ret) => Some(Err(fxcm::Error::from(ret))),
                 }
             } else {
+                self.rdr = None;
                 self.next(client)
             }
         } else {

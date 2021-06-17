@@ -34,7 +34,7 @@ struct Opts {
     train: i16,
 
     /// Number of iterations to run on live exchange.
-    #[clap(short, long)]
+    #[clap(short, long, default_value = "0")]
     live: i16,
 
     /// Dont send any orders.
@@ -91,7 +91,7 @@ fn main() -> fxcm::Result<()> {
                 move |url| Ok(client.get(url).send()?),
                 opts.begin,
                 opts.end,
-            ));
+            )?);
             history.as_mut().unwrap()
         } else {
             reader = Some(
@@ -115,5 +115,6 @@ fn main() -> fxcm::Result<()> {
         logging = Some(exchange::Logging::new(io::stdout(), exchange));
         exchange = logging.as_mut().unwrap();
     }
-    Ok(println!("{}", run(exchange, trader::Dummy {})?))
+    println!("{}", run(exchange, trader::Dummy {})?);
+    Ok(())
 }

@@ -1,17 +1,31 @@
 //! FXCM data model.
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, ParseError, Utc};
 use enum_map::Enum;
 use num_derive::FromPrimitive;
 use proptest_derive::Arbitrary;
 use rust_decimal::prelude::{Decimal, One};
 use serde::{Deserialize, Serialize};
-use std::{fmt, num, result};
-use strum_macros::EnumString;
+use std::{fmt, io, num, result};
+use strum_macros::{Display, EnumString};
 
 pub type FallibleCandle = self::Result<Candle>;
 
+/// Historical candle data is a slightly different format.
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct Historical {
+    /// Timestamp in US format.
+    date_time: String,
+
+    /// Opening bid price for time period.
+    bid_open: Decimal,
+
+    /// Opening ask price for time period.
+    ask_open: Decimal,
+}
+
 /// Candle data from the exchange.
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(Clone, Copy, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Candle {
     /// When the data occurred.
     pub ts: DateTime<Utc>,
@@ -24,6 +38,19 @@ pub struct Candle {
 
     /// Latest ask price.
     pub ask: Decimal,
+}
+
+impl Candle {
+    pub fn new(symbol: Symbol, historical: Historical) -> self::Result<Self> {
+        let ts = NaiveDateTime::parse_from_str(&historical.date_time, "%m/%d/%Y %H:%M:%S%.f")?;
+        let ts = DateTime::from_utc(ts, Utc);
+        Ok(Self {
+            symbol,
+            ts,
+            bid: historical.bid_open,
+            ask: historical.ask_open,
+        })
+    }
 }
 
 /// Data type for inserting and executing orders.
@@ -70,8 +97,9 @@ pub enum Error {
     Csv(csv::Error),
     Fmt(fmt::Error),
     Initialization,
-    IndexOutOfBounds(i8),
+    Io(io::Error),
     Order(Order),
+    ParseError(ParseError),
     Reqwest(reqwest::Error),
     TryFromInt(num::TryFromIntError),
 }
@@ -88,9 +116,21 @@ impl From<fmt::Error> for Error {
     }
 }
 
+impl From<io::Error> for Error {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
 impl From<Order> for Error {
     fn from(order: Order) -> Self {
         Self::Order(order)
+    }
+}
+
+impl From<ParseError> for Error {
+    fn from(error: ParseError) -> Self {
+        Self::ParseError(error)
     }
 }
 
@@ -108,6 +148,8 @@ impl From<num::TryFromIntError> for Error {
 
 /// All available currencies.
 #[derive(Clone, Copy, Debug, Deserialize, EnumString, PartialEq, Serialize)]
+#[serde(rename_all = "UPPERCASE")]
+#[strum(serialize_all = "UPPERCASE")]
 pub enum Currency {
     Aud,
     Cad,
@@ -120,7 +162,23 @@ pub enum Currency {
 }
 
 /// All available symbols.
-#[derive(Arbitrary, Clone, Copy, Debug, Deserialize, Enum, FromPrimitive, Serialize)]
+#[derive(
+    Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Display,
+    Deserialize,
+    Enum,
+    Eq,
+    FromPrimitive,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+)]
+#[serde(rename_all = "UPPERCASE")]
+#[strum(serialize_all = "UPPERCASE")]
 pub enum Symbol {
     AudCad,
     AudChf,
