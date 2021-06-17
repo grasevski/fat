@@ -2,6 +2,7 @@
 use chrono::{DateTime, Utc};
 use enum_map::Enum;
 use num_derive::FromPrimitive;
+use proptest_derive::Arbitrary;
 use rust_decimal::prelude::{Decimal, One};
 use serde::{Deserialize, Serialize};
 use std::{fmt, num, result};
@@ -106,7 +107,7 @@ impl From<num::TryFromIntError> for Error {
 }
 
 /// All available currencies.
-#[derive(Clone, Copy, Deserialize, EnumString, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, EnumString, PartialEq, Serialize)]
 pub enum Currency {
     Aud,
     Cad,
@@ -119,7 +120,7 @@ pub enum Currency {
 }
 
 /// All available symbols.
-#[derive(Clone, Copy, Debug, Deserialize, Enum, FromPrimitive, Serialize)]
+#[derive(Arbitrary, Clone, Copy, Debug, Deserialize, Enum, FromPrimitive, Serialize)]
 pub enum Symbol {
     AudCad,
     AudChf,
@@ -145,7 +146,7 @@ pub enum Symbol {
 }
 
 impl Symbol {
-    fn currencies(self) -> (Currency, Currency) {
+    const fn currencies(self) -> (Currency, Currency) {
         match self {
             Self::AudCad => (Currency::Aud, Currency::Cad),
             Self::AudChf => (Currency::Aud, Currency::Chf),
@@ -176,6 +177,15 @@ impl Symbol {
 pub struct Market {
     candle: Candle,
     position: Decimal,
+}
+
+impl From<Candle> for Market {
+    fn from(candle: Candle) -> Self {
+        Self {
+            candle,
+            position: Default::default(),
+        }
+    }
 }
 
 impl Market {
@@ -221,6 +231,19 @@ impl Market {
             -qty * order.price
         } else {
             Default::default()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::proptest;
+
+    proptest! {
+        #[test]
+        fn symbols_have_different_currencies(symbol: super::Symbol) {
+            let (a, b) = symbol.currencies();
+            assert_ne!(a, b);
         }
     }
 }

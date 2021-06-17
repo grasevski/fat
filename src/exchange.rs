@@ -217,12 +217,6 @@ pub struct Sim<S: Iterator<Item = fxcm::FallibleCandle>> {
 
 impl<S: Iterator<Item = fxcm::FallibleCandle>> Sim<S> {
     /// Initializes simulated exchange from config.
-    ///
-    /// # Examples
-    /// ```rust,editable
-    /// let exchange = Sim::new(fxcm::Currency::Aud, Default::default(), iter::empty());
-    /// assert_eq!(exchange.next(), None);
-    /// ```
     pub fn new(currency: fxcm::Currency, delay: humantime::Duration, src: S) -> fxcm::Result<Self> {
         Ok(Self {
             currency,
@@ -291,7 +285,7 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Iterator for Sim<S> {
                         if let Some(ref mut market) = self.markets[c.symbol] {
                             market.update(c);
                         } else {
-                            return Some(Err(fxcm::Error::Initialization));
+                            self.markets[c.symbol] = Some(c.into());
                         }
                     }
                     Err(e) => {

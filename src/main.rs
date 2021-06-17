@@ -9,9 +9,9 @@ use reqwest::blocking::Client;
 use rust_decimal::prelude::Decimal;
 use std::{env, io};
 
-mod history;
 mod exchange;
 mod fxcm;
+mod history;
 mod trader;
 
 /// FXCM autotrader and backtester.

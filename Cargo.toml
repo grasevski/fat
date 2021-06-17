@@ -17,6 +17,8 @@ flate2 = "*"
 heapless = "*"
 num-derive = "*"
 num-traits = "*"
+proptest = "*"
+proptest-derive = "*"
 rust_decimal = "*"
 reqwest = { features = ["blocking", "rustls-tls"], version = "*" }
 serde = { features = ["derive"], version = "*" }

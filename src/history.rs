@@ -17,12 +17,6 @@ pub struct History<R: Read, F: FnMut(&str) -> fxcm::Result<R>> {
 
 impl<R: Read, F: FnMut(&str) -> fxcm::Result<R>> History<R, F> {
     /// Initializes data loader for given date range.
-    ///
-    /// # Examples
-    /// ```rust,editable
-    /// let history = History::new(|_| [], Default::default(), None);
-    /// assert_eq!(history.next(), None);
-    /// ```
     pub fn new(client: F, begin: NaiveDate, end: Option<NaiveDate>) -> Self {
         let mut buf = EnumMap::default();
         for (k, v) in &mut buf {
