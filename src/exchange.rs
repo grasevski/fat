@@ -1,6 +1,6 @@
 //! Exchange interface and implementations.
 use super::fxcm;
-use chrono::Duration;
+use chrono::{DateTime, Duration, Utc};
 use csv::Writer;
 use enum_map::EnumMap;
 use heapless::spsc::Queue;
@@ -208,11 +208,12 @@ impl<E: Exchange> Iterator for Hybrid<E> {
 pub struct Sim<S: Iterator<Item = fxcm::FallibleCandle>> {
     currency: fxcm::Currency,
     delay: Duration,
-    src: S,
-    candle: Option<fxcm::Candle>,
     balance: Decimal,
-    markets: EnumMap<fxcm::Symbol, Option<fxcm::Market>>,
+    ts: Option<DateTime<Utc>>,
+    candle: Option<fxcm::Candle>,
+    src: S,
     orders: Queue<fxcm::Order, 8>,
+    markets: EnumMap<fxcm::Symbol, Option<fxcm::Market>>,
 }
 
 impl<S: Iterator<Item = fxcm::FallibleCandle>> Sim<S> {
@@ -221,11 +222,12 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Sim<S> {
         Ok(Self {
             currency,
             delay: Duration::seconds(delay.as_secs().try_into()?),
-            src,
-            candle: Default::default(),
             balance: Default::default(),
-            markets: Default::default(),
+            ts: Default::default(),
+            candle: Default::default(),
+            src,
             orders: Queue::new(),
+            markets: Default::default(),
         })
     }
 
@@ -243,14 +245,15 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Sim<S> {
     }
 
     fn set_candle(&mut self, candle: fxcm::Candle) {
-        self.candle = Some(candle)
+        self.ts = Some(candle.ts);
+        self.candle = Some(candle);
     }
 }
 
 impl<S: Iterator<Item = fxcm::FallibleCandle>> Exchange for Sim<S> {
     fn insert(&mut self, mut order: fxcm::Order) -> fxcm::Result<()> {
-        if let Some(ref candle) = self.candle {
-            order.ts = candle.ts + self.delay;
+        if let Some(ts) = self.ts {
+            order.ts = ts + self.delay;
             Ok(self.orders.enqueue(order)?)
         } else {
             Err(fxcm::Error::Initialization)
@@ -261,9 +264,9 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Exchange for Sim<S> {
         let markets: Decimal = self
             .markets
             .values()
-            .map(|x| {
-                if let Some(m) = x {
-                    m.pnl(self.currency)
+            .map(|market| {
+                if let Some(market) = market {
+                    market.pnl(self.currency)
                 } else {
                     Default::default()
                 }
@@ -280,12 +283,12 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Iterator for Sim<S> {
         if self.candle.is_none() {
             if let Some(candle) = self.src.next() {
                 match candle {
-                    Ok(c) => {
-                        self.candle = Some(c);
-                        if let Some(ref mut market) = self.markets[c.symbol] {
-                            market.update(c);
+                    Ok(candle) => {
+                        self.set_candle(candle);
+                        if let Some(ref mut market) = self.markets[candle.symbol] {
+                            market.update(candle);
                         } else {
-                            self.markets[c.symbol] = Some(c.into());
+                            self.markets[candle.symbol] = Some(candle.into());
                         }
                     }
                     Err(e) => {
@@ -297,8 +300,8 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Iterator for Sim<S> {
         if let Some(candle) = self.candle {
             if let Some(order) = self.orders.peek() {
                 if order.ts < candle.ts {
-                    return if let Some(o) = self.orders.dequeue() {
-                        self.trade(o)
+                    return if let Some(order) = self.orders.dequeue() {
+                        self.trade(order)
                     } else {
                         Some(Err(fxcm::Error::Initialization))
                     };

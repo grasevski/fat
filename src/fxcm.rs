@@ -75,15 +75,30 @@ pub struct Order {
     pub qty: Decimal,
 }
 
+impl Order {
+    /// Creates a new order to be inserted by the trader.
+    pub fn new(id: usize, symbol: Symbol, side: Side, qty: Decimal) -> Option<Result<Self>> {
+        let ts = DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc);
+        let price = Default::default();
+        Some(Ok(Self {
+            id,
+            ts,
+            symbol,
+            side,
+            price,
+            qty,
+        }))
+    }
+}
+
 /// Whether it is a buy order or a sell order.
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Debug, Serialize)]
 pub enum Side {
     Bid,
     Ask,
 }
 
 /// All possible events that can be received from the exchange.
-#[derive(Serialize)]
 pub enum Event {
     Candle(Candle),
     Order(Order),

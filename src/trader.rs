@@ -1,5 +1,6 @@
 //! Trader interface and implementations.
 use super::fxcm;
+use rust_decimal::prelude::One;
 
 pub type FallibleOrder = fxcm::Result<fxcm::Order>;
 
@@ -13,22 +14,39 @@ pub trait Trader: Iterator<Item = FallibleOrder> {
 }
 
 /// Do nothing trader.
-pub struct Dummy {}
+#[derive(Default)]
+pub struct MrMagoo {
+    initialized: bool,
+    ready: bool,
+    seq: usize,
+}
 
-impl Trader for Dummy {
+impl Trader for MrMagoo {
     fn on_candle(&mut self, candle: &fxcm::Candle) -> fxcm::Result<()> {
+        if !self.initialized && candle.symbol == fxcm::Symbol::EurUsd {
+            self.initialized = true;
+            self.ready = true;
+        }
         Ok(())
     }
 
     fn on_order(&mut self, order: &fxcm::Order) -> fxcm::Result<()> {
+        self.ready = true;
         Ok(())
     }
 }
 
-impl Iterator for Dummy {
+impl Iterator for MrMagoo {
     type Item = FallibleOrder;
 
     fn next(&mut self) -> Option<Self::Item> {
-        None
+        if self.initialized && self.ready {
+            self.ready = false;
+            self.seq += 1;
+            let ret = fxcm::Order::new(self.seq, fxcm::Symbol::EurUsd, fxcm::Side::Ask, One::one());
+            ret
+        } else {
+            None
+        }
     }
 }
