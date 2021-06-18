@@ -116,19 +116,14 @@ impl<R: Read> HistoryLoader<R> {
                 match candle {
                     Ok(candle) => match fxcm::Candle::new(self.symbol, candle) {
                         Ok(candle) => {
-                            let t = candle.ts.naive_utc().date();
-                            if t >= self.current - Duration::weeks(1) {
-                                if let Some(end) = self.end {
-                                    if t < end {
-                                        Some(Ok(candle))
-                                    } else {
-                                        None
-                                    }
-                                } else {
+                            if let Some(end) = self.end {
+                                if candle.ts.naive_utc().date() < end {
                                     Some(Ok(candle))
+                                } else {
+                                    None
                                 }
                             } else {
-                                None
+                                Some(Ok(candle))
                             }
                         }
                         Err(err) => Some(Err(err)),
