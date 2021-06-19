@@ -30,11 +30,11 @@ struct Opts {
     currency: fxcm::Currency,
 
     /// Number of iterations to simulate.
-    #[clap(short, long, default_value = "1000")]
+    #[clap(short, long, default_value = "0")]
     train: i16,
 
     /// Number of iterations to run on live exchange.
-    #[clap(short, long, default_value = "0")]
+    #[clap(short, long, default_value = "-1")]
     live: i16,
 
     /// Dont send any orders.

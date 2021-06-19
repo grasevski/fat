@@ -16,22 +16,21 @@ pub trait Trader: Iterator<Item = FallibleOrder> {
 /// Do nothing trader.
 #[derive(Default)]
 pub struct MrMagoo {
-    initialized: bool,
+    waiting: bool,
     ready: bool,
     seq: usize,
 }
 
 impl Trader for MrMagoo {
     fn on_candle(&mut self, candle: &fxcm::Candle) -> fxcm::Result<()> {
-        if !self.initialized && candle.symbol == fxcm::Symbol::EurUsd {
-            self.initialized = true;
+        if !self.ready && candle.symbol == fxcm::Symbol::EurUsd {
             self.ready = true;
         }
         Ok(())
     }
 
     fn on_order(&mut self, order: &fxcm::Order) -> fxcm::Result<()> {
-        self.ready = true;
+        self.waiting = false;
         Ok(())
     }
 }
@@ -40,7 +39,8 @@ impl Iterator for MrMagoo {
     type Item = FallibleOrder;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.initialized && self.ready {
+        if !self.waiting && self.ready {
+            self.waiting = true;
             self.ready = false;
             self.seq += 1;
             fxcm::Order::new(self.seq, fxcm::Symbol::EurUsd, fxcm::Side::Ask, One::one())
