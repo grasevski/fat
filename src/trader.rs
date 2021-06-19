@@ -43,7 +43,7 @@ impl Iterator for MrMagoo {
             self.waiting = true;
             self.ready = false;
             self.seq += 1;
-            fxcm::Order::new(self.seq, fxcm::Symbol::EurUsd, fxcm::Side::Ask, One::one())
+            fxcm::Order::new(self.seq, fxcm::Symbol::EurUsd, fxcm::Side::Bid, One::one())
         } else {
             None
         }
