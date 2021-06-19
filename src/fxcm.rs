@@ -41,7 +41,13 @@ pub struct Candle {
 }
 
 impl Candle {
+    /// Converts a historical data candle into a regular candle.
     pub fn new(symbol: Symbol, historical: Historical) -> self::Result<Self> {
+        assert_ne!(historical.bid_open, Default::default());
+        assert_ne!(historical.ask_open, Default::default());
+        assert!(historical.bid_open > Default::default());
+        assert!(historical.ask_open > Default::default());
+        assert!(historical.ask_open > historical.bid_open);
         let ts = NaiveDateTime::parse_from_str(&historical.date_time, "%m/%d/%Y %H:%M:%S%.f")?;
         let ts = DateTime::from_utc(ts, Utc);
         Ok(Self {
@@ -75,14 +81,20 @@ pub struct Order {
     pub qty: Decimal,
 }
 
+fn dummy_timestamp() -> DateTime<Utc> {
+    DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc)
+}
+
 impl Order {
     /// Creates a new order to be inserted by the trader.
     pub fn new(id: usize, symbol: Symbol, side: Side, qty: Decimal) -> Option<Result<Self>> {
-        let ts = DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc);
+        assert_ne!(id, Default::default());
+        assert_ne!(qty, Default::default());
+        assert!(qty > Default::default());
         let price = Default::default();
         Some(Ok(Self {
             id,
-            ts,
+            ts: dummy_timestamp(),
             symbol,
             side,
             price,
@@ -92,7 +104,7 @@ impl Order {
 }
 
 /// Whether it is a buy order or a sell order.
-#[derive(Debug, Serialize)]
+#[derive(Arbitrary, Debug, Serialize)]
 pub enum Side {
     Bid,
     Ask,
@@ -219,8 +231,8 @@ pub enum Symbol {
 }
 
 impl Symbol {
-    const fn currencies(self) -> (Currency, Currency) {
-        match self {
+    fn currencies(self) -> (Currency, Currency) {
+        let ret = match self {
             Self::AudCad => (Currency::Aud, Currency::Cad),
             Self::AudChf => (Currency::Aud, Currency::Chf),
             Self::AudJpy => (Currency::Aud, Currency::Jpy),
@@ -242,21 +254,25 @@ impl Symbol {
             Self::UsdCad => (Currency::Usd, Currency::Cad),
             Self::UsdChf => (Currency::Usd, Currency::Chf),
             Self::UsdJpy => (Currency::Usd, Currency::Jpy),
-        }
+        };
+        assert_ne!(ret.0, ret.1);
+        ret
     }
 }
 
 /// Tracks the current position and pnl for a given symbol.
 pub struct Market {
     candle: Candle,
-    position: Decimal,
+    base_balance: Decimal,
+    quote_balance: Decimal,
 }
 
 impl From<Candle> for Market {
     fn from(candle: Candle) -> Self {
         Self {
             candle,
-            position: Default::default(),
+            base_balance: Default::default(),
+            quote_balance: Default::default(),
         }
     }
 }
@@ -270,23 +286,27 @@ impl Market {
     /// Calculates the pnl with respect to the given currency.
     pub fn pnl(&self, currency: Currency) -> Decimal {
         let (base, quote) = self.candle.symbol.currencies();
-        let p = if self.position > Default::default() {
-            self.candle.bid
-        } else {
-            self.candle.ask
-        };
-        self.position
-            * if currency == base {
-                p
-            } else if currency == quote {
-                -Decimal::one() / p
+        if currency == base {
+            let p = if self.quote_balance > Default::default() {
+                self.candle.bid
             } else {
-                Default::default()
-            }
+                self.candle.ask
+            };
+            self.base_balance + self.quote_balance * p
+        } else if currency == quote {
+            let p = if self.base_balance > Default::default() {
+                self.candle.ask
+            } else {
+                self.candle.bid
+            };
+            self.quote_balance + self.base_balance / p
+        } else {
+            Default::default()
+        }
     }
 
     /// Updates the current position based on the given trade.
-    pub fn trade(&mut self, currency: Currency, order: &mut Order) -> Decimal {
+    pub fn trade(&mut self, order: &mut Order) {
         order.price = match order.side {
             Side::Bid => self.candle.ask,
             Side::Ask => self.candle.bid,
@@ -296,27 +316,47 @@ impl Market {
                 Side::Bid => Decimal::one(),
                 Side::Ask => -Decimal::one(),
             };
-        self.position += qty;
-        let (base, quote) = self.candle.symbol.currencies();
-        if currency == base {
-            qty
-        } else if currency == quote {
-            -qty * order.price
-        } else {
-            Default::default()
-        }
+        self.base_balance -= qty;
+        self.quote_balance += qty / order.price;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use proptest::prelude::proptest;
+    use rust_decimal::prelude::{Decimal, One};
+    use std::mem;
 
     proptest! {
         #[test]
-        fn symbols_have_different_currencies(symbol: super::Symbol) {
-            let (a, b) = symbol.currencies();
-            assert_ne!(a, b);
+        fn crossing_the_spread_costs_money(symbol: super::Symbol, bid: u8, ask: u8, base: bool, id: u8, side: super::Side, qty: u8, jump: i8) {
+            let q = Decimal::from(16);
+            let (mut bid, mut ask, mut qty) = (Decimal::from(bid), Decimal::from(ask), Decimal::from(qty));
+            bid += Decimal::one();
+            ask += Decimal::one();
+            qty += Decimal::one();
+            if bid == ask {
+                ask += Decimal::one();
+            } else if bid > ask {
+                mem::swap(&mut bid, &mut ask);
+            }
+            bid /= q;
+            ask /= q;
+            qty /= q;
+            let candle = super::Candle{ts: super::dummy_timestamp(), symbol, bid, ask};
+            let mut market = super::Market::from(candle);
+            let mut order = super::Order::new(usize::from(id) + 1, candle.symbol, side, qty).unwrap().unwrap();
+            let (b, q) = candle.symbol.currencies();
+            let currency = if base {b} else {q};
+            assert_eq!(market.pnl(currency), Default::default());
+            market.trade(&mut order);
+            assert!(market.pnl(currency) < Default::default());
+            order.side = match order.side {
+                super::Side::Bid => super::Side::Ask,
+                super::Side::Ask => super::Side::Bid,
+            };
+            market.trade(&mut order);
+            assert!(market.pnl(currency) < Default::default());
         }
     }
 }

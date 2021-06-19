@@ -43,8 +43,7 @@ impl Iterator for MrMagoo {
         if self.initialized && self.ready {
             self.ready = false;
             self.seq += 1;
-            let ret = fxcm::Order::new(self.seq, fxcm::Symbol::EurUsd, fxcm::Side::Ask, One::one());
-            ret
+            fxcm::Order::new(self.seq, fxcm::Symbol::EurUsd, fxcm::Side::Ask, One::one())
         } else {
             None
         }

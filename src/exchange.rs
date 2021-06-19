@@ -208,7 +208,6 @@ impl<E: Exchange> Iterator for Hybrid<E> {
 pub struct Sim<S: Iterator<Item = fxcm::FallibleCandle>> {
     currency: fxcm::Currency,
     delay: Duration,
-    balance: Decimal,
     ts: Option<DateTime<Utc>>,
     candle: Option<fxcm::Candle>,
     src: S,
@@ -222,7 +221,6 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Sim<S> {
         Ok(Self {
             currency,
             delay: Duration::seconds(delay.as_secs().try_into()?),
-            balance: Default::default(),
             ts: Default::default(),
             candle: Default::default(),
             src,
@@ -233,7 +231,7 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Sim<S> {
 
     fn trade(&mut self, mut order: fxcm::Order) -> Option<FallibleEvent> {
         if let Some(ref mut market) = self.markets[order.symbol] {
-            self.balance += market.trade(self.currency, &mut order);
+            market.trade(&mut order);
             Some(Ok(fxcm::Event::Order(order)))
         } else {
             Some(Err(fxcm::Error::Initialization))
@@ -261,7 +259,7 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Exchange for Sim<S> {
     }
 
     fn pnl(&self) -> fxcm::Result<Decimal> {
-        let markets: Decimal = self
+        let ret: Decimal = self
             .markets
             .values()
             .map(|market| {
@@ -272,7 +270,7 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Exchange for Sim<S> {
                 }
             })
             .sum();
-        Ok(self.balance + markets)
+        Ok(ret)
     }
 }
 
