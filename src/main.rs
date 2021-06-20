@@ -115,6 +115,9 @@ fn main() -> fxcm::Result<()> {
         logging = Some(exchange::Logging::new(io::stdout(), exchange));
         exchange = logging.as_mut().unwrap();
     }
-    println!("{}", run(exchange, trader::MrMagoo::try_from(opts.currency)?)?);
+    println!(
+        "{}",
+        run(exchange, trader::MrMagoo::try_from(opts.currency)?)?
+    );
     Ok(())
 }

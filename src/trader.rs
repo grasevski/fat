@@ -20,29 +20,31 @@ pub trait Trader: Iterator<Item = FallibleOrder> {
 struct Model {
     t2v: Time2Vec,
     mgu: Mgu,
+    out: nn::Linear,
 }
 
 impl Model {
     fn new(path: &nn::Path, i: i8, k: i8, h: i8, o: i8) -> fxcm::Result<Self> {
-        let t2v = Time2Vec::new(path, k.into());
-        let mgu = Mgu::new(path, i + i8::try_from(t2v.size())?, h, o);
-        Ok(Self { t2v, mgu })
+        let t2v = Time2Vec::new(path, k);
+        let mgu = Mgu::new(path, i + k, h);
+        let out = nn::linear(path, h.into(), o.into(), Default::default());
+        Ok(Self { t2v, mgu, out })
     }
 }
 
 impl nn::Module for Model {
     fn forward(&self, xs: &Tensor) -> Tensor {
-        self.mgu.forward(&Tensor::cat(&[xs, &self.t2v.forward(&xs.get(0))], 0))
+        let h = self
+            .mgu
+            .forward(&Tensor::cat(&[&self.t2v.forward(&xs.get(0)), xs], 0));
+        Tensor::cat(&[self.out.forward(&h), h], 0)
     }
 }
 
 #[derive(Debug)]
 struct Mgu {
-    i: i64,
     f: nn::Linear,
     h: nn::Linear,
-    o: nn::Linear,
-    s: Tensor,
 }
 
 fn options() -> (Kind, Device) {
@@ -50,26 +52,26 @@ fn options() -> (Kind, Device) {
 }
 
 impl Mgu {
-    fn new(path: &nn::Path, i: i8, h: i8, o: i8) -> Self {
-        let (i, h, o) = (i.into(), h.into(), o.into());
-        let n = i + h;
-        Self {
-            i,
-            f: nn::linear(path, n, h, Default::default()),
-            h: nn::linear(path, n, h, Default::default()),
-            o: nn::linear(path, h, o, Default::default()),
-            s: Tensor::zeros(&[h], options()),
-        }
+    fn new(path: &nn::Path, i: i8, h: i8) -> Self {
+        let h = h.into();
+        let n = i64::from(i) + h;
+        let f = nn::linear(path, n, h, Default::default());
+        let h = nn::linear(path, n, h, Default::default());
+        Self { f, h }
     }
 }
 
 impl nn::Module for Mgu {
     fn forward(&self, xs: &Tensor) -> Tensor {
-        let f = self.f.forward(&Tensor::cat(&[xs, &self.s], 0)).sigmoid();
-        let h = self.h.forward(&Tensor::cat(&[xs, &(&f * &self.s)], 0)).tanh();
-        self.s *= 1 - &f;
-        self.s += f * h;
-        self.o.forward(&self.s)
+        let f = self.f.forward(xs).sigmoid();
+        let mut t = xs.tensor_split1(&[xs.size1().unwrap() - self.f.bs.size1().unwrap()], 0);
+        let h = self
+            .h
+            .forward(&Tensor::cat(&[&t[0], &(&f * &t[1])], 0))
+            .tanh();
+        t[1] *= 1 - &f;
+        t[1] += f * h;
+        t[1].shallow_clone()
     }
 }
 
@@ -79,10 +81,6 @@ struct Time2Vec(nn::Linear);
 impl Time2Vec {
     fn new(path: &nn::Path, k: i8) -> Self {
         Self(nn::linear(path, 1, k.into(), Default::default()))
-    }
-
-    fn size(&self) -> i64 {
-        self.0.bs.size()[0]
     }
 }
 
