@@ -231,7 +231,7 @@ pub enum Symbol {
 }
 
 impl Symbol {
-    fn currencies(self) -> (Currency, Currency) {
+    pub fn currencies(self) -> (Currency, Currency) {
         let ret = match self {
             Self::AudCad => (Currency::Aud, Currency::Cad),
             Self::AudChf => (Currency::Aud, Currency::Chf),

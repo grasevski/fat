@@ -7,7 +7,7 @@ use clap::Clap;
 use csv::Reader;
 use reqwest::blocking::Client;
 use rust_decimal::prelude::Decimal;
-use std::{env, io};
+use std::{convert::TryFrom, env, io};
 
 mod exchange;
 mod fxcm;
@@ -115,6 +115,6 @@ fn main() -> fxcm::Result<()> {
         logging = Some(exchange::Logging::new(io::stdout(), exchange));
         exchange = logging.as_mut().unwrap();
     }
-    println!("{}", run(exchange, trader::MrMagoo::default())?);
+    println!("{}", run(exchange, trader::MrMagoo::try_from(opts.currency)?)?);
     Ok(())
 }

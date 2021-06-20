@@ -252,7 +252,8 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Exchange for Sim<S> {
     fn insert(&mut self, mut order: fxcm::Order) -> fxcm::Result<()> {
         if let Some(ts) = self.ts {
             order.ts = ts + self.delay;
-            Ok(self.orders.enqueue(order)?)
+            self.orders.enqueue(order)?;
+            Ok(())
         } else {
             Err(fxcm::Error::Initialization)
         }
