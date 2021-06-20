@@ -301,6 +301,8 @@ impl Market {
             };
             self.quote_balance + self.base_balance / p
         } else {
+            assert_eq!(self.base_balance, Default::default());
+            assert_eq!(self.quote_balance, Default::default());
             Default::default()
         }
     }
