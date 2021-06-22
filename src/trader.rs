@@ -3,7 +3,7 @@ use super::fxcm;
 use enum_map::{Enum, EnumMap};
 use rust_decimal::prelude::One;
 use std::convert::{TryFrom, TryInto};
-use tch::{nn, Device, Kind, Tensor};
+use tch::{nn, nn::OptimizerConfig, Device, Kind, Tensor};
 
 pub type FallibleOrder = fxcm::Result<fxcm::Order>;
 
@@ -16,19 +16,31 @@ pub trait Trader: Iterator<Item = FallibleOrder> {
     fn on_order(&mut self, order: &fxcm::Order) -> fxcm::Result<()>;
 }
 
+/// PyTorch actor critic model.
 #[derive(Debug)]
 struct Model {
+    /// Spectral time embedding.
     t2v: Time2Vec,
+
+    /// RNN cell.
     mgu: Mgu,
+
+    /// Prediction output head.
     out: nn::Linear,
 }
 
 impl Model {
-    fn new(path: &nn::Path, i: i8, k: i8, h: i8, o: i8) -> fxcm::Result<Self> {
-        let t2v = Time2Vec::new(path, k);
-        let mgu = Mgu::new(path, i + k, h);
-        let out = nn::linear(path, h.into(), o.into(), Default::default());
+    /// Initializes the model.
+    fn new(p: &nn::Path, i: i8, k: i8, h: i8, o: i8) -> fxcm::Result<Self> {
+        let t2v = Time2Vec::new(&(p / "t2v"), k);
+        let mgu = Mgu::new(&(p / "mgu"), i + k, h);
+        let out = nn::linear(&(p / "out"), h.into(), o.into(), Default::default());
         Ok(Self { t2v, mgu, out })
+    }
+
+    /// Dimension of the input.
+    fn in_dim(&self) -> fxcm::Result<i64> {
+        self.mgu.in_dim()
     }
 }
 
@@ -41,23 +53,34 @@ impl nn::Module for Model {
     }
 }
 
-#[derive(Debug)]
-struct Mgu {
-    f: nn::Linear,
-    h: nn::Linear,
-}
-
+/// Returns the config used for all tensors.
 fn options() -> (Kind, Device) {
     (Kind::Float, Device::cuda_if_available())
 }
 
+/// Minimal Gated Unit.
+#[derive(Debug)]
+struct Mgu {
+    /// Forget gate.
+    f: nn::Linear,
+
+    /// Hidden layer.
+    h: nn::Linear,
+}
+
 impl Mgu {
-    fn new(path: &nn::Path, i: i8, h: i8) -> Self {
+    /// Initializes the MGU according to the input and hidden dimensions.
+    fn new(p: &nn::Path, i: i8, h: i8) -> Self {
         let h = h.into();
         let n = i64::from(i) + h;
-        let f = nn::linear(path, n, h, Default::default());
-        let h = nn::linear(path, n, h, Default::default());
+        let f = nn::linear(p / "f", n, h, Default::default());
+        let h = nn::linear(p / "h", n, h, Default::default());
         Self { f, h }
+    }
+
+    /// Dimension of the input.
+    fn in_dim(&self) -> fxcm::Result<i64> {
+        Ok(self.f.ws.size2()?.0)
     }
 }
 
@@ -75,12 +98,14 @@ impl nn::Module for Mgu {
     }
 }
 
+/// Fourier transform with learnable phases.
 #[derive(Debug)]
 struct Time2Vec(nn::Linear);
 
 impl Time2Vec {
-    fn new(path: &nn::Path, k: i8) -> Self {
-        Self(nn::linear(path, 1, k.into(), Default::default()))
+    /// Initializes the embedding according to the desired dimension.
+    fn new(p: &nn::Path, k: i8) -> Self {
+        Self(nn::linear(p / "t2v", 1, k.into(), Default::default()))
     }
 }
 
@@ -92,12 +117,31 @@ impl nn::Module for Time2Vec {
 
 /// Do nothing trader.
 pub struct MrMagoo {
+    /// Whether it is waiting for an order to execute.
     waiting: bool,
+
+    /// Whether it is ready to send an order.
     ready: bool,
+
+    /// Latest order sequence number.
     seq: usize,
+
+    /// Remaining candle data to receive before being ready.
+    remaining: i8,
+
+    /// Settlement currency.
     currency: fxcm::Currency,
+
+    /// PyTorch heap, may be on either GPU or CPU.
     vs: nn::VarStore,
+
+    /// Gradient descent method.
+    optimizer: nn::Optimizer<nn::AdamW>,
+
+    /// Actor critic model.
     model: Model,
+
+    /// All state for the trader, including hidden state.
     state: Tensor,
 }
 
@@ -113,14 +157,17 @@ impl TryFrom<fxcm::Currency> for MrMagoo {
             + 1;
         let i = 2 * n + o;
         let vs = nn::VarStore::new(Device::cuda_if_available());
+        let optimizer = nn::AdamW::default().build(&vs, 1e-3)?;
         let model = Model::new(&vs.root(), i.try_into()?, 16, 16, o.try_into()?)?;
-        let state = Tensor::zeros(&[i.try_into()?], options());
+        let state = Tensor::zeros(&[model.in_dim()?], options());
         Ok(Self {
             waiting: false,
             ready: false,
             seq: 0,
+            remaining: n.try_into()?,
             currency,
             vs,
+            optimizer,
             model,
             state,
         })
@@ -129,6 +176,15 @@ impl TryFrom<fxcm::Currency> for MrMagoo {
 
 impl Trader for MrMagoo {
     fn on_candle(&mut self, candle: &fxcm::Candle) -> fxcm::Result<()> {
+        /*if self.remaining == EnumMap::<fxcm::Symbol, ()>::default().len() {
+            self.state[0] = f32::from(candle.ts);
+        }
+        self.state[2 * candle.symbol.to_usize() + 1] = f32::from(candle.bid);
+        self.state[2 * candle.symbol.to_usize() + 2] = f32::from(candle.ask);
+        self.remaining -= 1;
+        if self.remaining == 0 {
+            let pred = self.model.forward(&self.state);
+        }*/
         if !self.ready && candle.symbol == fxcm::Symbol::EurUsd {
             self.ready = true;
         }

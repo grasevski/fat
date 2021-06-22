@@ -9,9 +9,16 @@ use std::{fmt::Write, io::Read};
 
 /// Iterator to get historical data for all symbols.
 pub struct History<R: Read, F: FnMut(&str) -> fxcm::Result<R>> {
+    /// Starting point of time range.
     begin: NaiveDate,
+
+    /// Optional end point of time range.
     end: Option<NaiveDate>,
+
+    /// Interface to fetch historical data.
     client: F,
+
+    /// A state machine for each symbol.
     buf: EnumMap<fxcm::Symbol, (Option<fxcm::Candle>, Option<HistoryLoader<R>>)>,
 }
 
@@ -68,13 +75,20 @@ impl<R: Read, F: FnMut(&str) -> fxcm::Result<R>> Iterator for History<R, F> {
     }
 }
 
+/// A data loader for a given symbol.
 struct HistoryLoader<R: Read> {
+    /// Current time point in the data.
     current: NaiveDate,
+
+    /// Whether the current response is empty.
     empty: bool,
+
+    /// Handle for the current candle data response file.
     rdr: Option<DeserializeRecordsIntoIter<GzDecoder<R>, fxcm::Historical>>,
 }
 
 impl<R: Read> HistoryLoader<R> {
+    /// Initializes the data loader with the start date.
     fn new(current: NaiveDate) -> Self {
         Self {
             current,
@@ -83,6 +97,7 @@ impl<R: Read> HistoryLoader<R> {
         }
     }
 
+    /// Gets the next candle record from the data source.
     fn next(
         &mut self,
         symbol: fxcm::Symbol,

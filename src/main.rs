@@ -62,6 +62,7 @@ struct Opts {
     end: Option<NaiveDate>,
 }
 
+/// Connects trader to exchange and runs to completion.
 fn run<E: exchange::Exchange, T: trader::Trader>(
     mut exchange: E,
     mut trader: T,
@@ -78,6 +79,7 @@ fn run<E: exchange::Exchange, T: trader::Trader>(
     exchange.pnl()
 }
 
+/// Configures and runs the backtester and or exchange.
 fn main() -> fxcm::Result<()> {
     let opts = Opts::parse();
     let (mut real, mut sim, mut dryrun, mut logging, mut history, mut reader) = Default::default();

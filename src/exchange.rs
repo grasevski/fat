@@ -7,6 +7,7 @@ use heapless::spsc::Queue;
 use rust_decimal::prelude::Decimal;
 use std::{convert::TryInto, io::Write, iter};
 
+/// The exchange may fail to return an event.
 pub type FallibleEvent = fxcm::Result<fxcm::Event>;
 
 /// Use decorator pattern to have different exchange configurations.
@@ -128,9 +129,16 @@ impl<W: Write, E: Exchange> Iterator for Logging<W, E> {
 
 /// Runs training on simulated exchange, then live on actual exchange.
 pub struct Hybrid<E: Exchange> {
+    /// Number of iterations to run on simulated exchange, or negative to run indefinitely.
     train: i16,
+
+    /// Number of iterations to run on live exchange, or negative to run indefinitely.
     live: i16,
+
+    /// Simulated exchange.
     sim: Sim<iter::Empty<fxcm::FallibleCandle>>,
+
+    /// Real exchange.
     exchange: E,
 }
 
@@ -206,12 +214,25 @@ impl<E: Exchange> Iterator for Hybrid<E> {
 
 /// Simulated exchange.
 pub struct Sim<S: Iterator<Item = fxcm::FallibleCandle>> {
+    /// Settlement currency.
     currency: fxcm::Currency,
+
+    /// Artificial order insertion delay.
     delay: Duration,
+
+    /// Current simulated time.
     ts: Option<DateTime<Utc>>,
+
+    /// Most recently received candle.
     candle: Option<fxcm::Candle>,
+
+    /// Candle data source.
     src: S,
+
+    /// Order queue.
     orders: Queue<fxcm::Order, 8>,
+
+    /// Market data.
     markets: EnumMap<fxcm::Symbol, Option<fxcm::Market>>,
 }
 

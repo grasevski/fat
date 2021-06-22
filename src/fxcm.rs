@@ -7,7 +7,9 @@ use rust_decimal::prelude::{Decimal, One};
 use serde::{Deserialize, Serialize};
 use std::{fmt, io, num, result};
 use strum_macros::{Display, EnumString};
+use tch::TchError;
 
+/// Candle iterators may fail and return an error instead.
 pub type FallibleCandle = self::Result<Candle>;
 
 /// Historical candle data is a slightly different format.
@@ -81,6 +83,7 @@ pub struct Order {
     pub qty: Decimal,
 }
 
+/// Returns a placeholder epoch timestamp before proper initialization.
 fn dummy_timestamp() -> DateTime<Utc> {
     DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc)
 }
@@ -106,28 +109,53 @@ impl Order {
 /// Whether it is a buy order or a sell order.
 #[derive(Arbitrary, Debug, Serialize)]
 pub enum Side {
+    /// A buy order.
     Bid,
+
+    /// A sell order.
     Ask,
 }
 
 /// All possible events that can be received from the exchange.
 pub enum Event {
+    /// A periodic candle datum.
     Candle(Candle),
+
+    /// An order created by the trader.
     Order(Order),
 }
 
+/// FXCM specific result type.
 pub type Result<T> = result::Result<T, self::Error>;
 
 /// All possible errors returned by this library.
 #[derive(Debug)]
 pub enum Error {
+    /// Parsing csv failed.
     Csv(csv::Error),
+
+    /// Formatting a URL failed.
     Fmt(fmt::Error),
+
+    /// Incorrect initialization.
     Initialization,
+
+    /// Error reading or writing to the exchange or data source.
     Io(io::Error),
+
+    /// Too many orders sent to the exchange.
     Order(Order),
+
+    /// Failed to parse timestamp.
     ParseError(ParseError),
+
+    /// HTTP request failed.
     Reqwest(reqwest::Error),
+
+    /// PyTorch exception.
+    Tch(TchError),
+
+    /// Integer type conversion failed.
     TryFromInt(num::TryFromIntError),
 }
 
@@ -167,6 +195,12 @@ impl From<reqwest::Error> for Error {
     }
 }
 
+impl From<TchError> for Error {
+    fn from(error: TchError) -> Self {
+        Self::Tch(error)
+    }
+}
+
 impl From<num::TryFromIntError> for Error {
     fn from(error: num::TryFromIntError) -> Self {
         Self::TryFromInt(error)
@@ -178,13 +212,28 @@ impl From<num::TryFromIntError> for Error {
 #[serde(rename_all = "UPPERCASE")]
 #[strum(serialize_all = "UPPERCASE")]
 pub enum Currency {
+    /// Australian Dollar.
     Aud,
+
+    /// Canadian Dollar.
     Cad,
+
+    /// Swiss Franc.
     Chf,
+
+    /// Euro.
     Eur,
+
+    /// Great British Pound.
     Gbp,
+
+    /// Japanese Yen.
     Jpy,
+
+    /// New Zealand Dollar.
     Nzd,
+
+    /// United States Dollar.
     Usd,
 }
 
@@ -262,8 +311,13 @@ impl Symbol {
 
 /// Tracks the current position and pnl for a given symbol.
 pub struct Market {
+    /// Current candle data.
     candle: Candle,
+
+    /// Trader balance for the base currency of the given symbol.
     base_balance: Decimal,
+
+    /// Trader balance for the quote currency of the given symbol.
     quote_balance: Decimal,
 }
 
