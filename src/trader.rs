@@ -1,9 +1,9 @@
 //! Trader interface and implementations.
 use super::fxcm;
 use enum_map::{Enum, EnumMap};
-use rust_decimal::prelude::One;
+use rust_decimal::prelude::{One, ToPrimitive};
 use std::convert::{TryFrom, TryInto};
-use tch::{nn, nn::OptimizerConfig, Device, Kind, Tensor};
+use tch::{nn, nn::{Module, OptimizerConfig}, Device, Kind, Tensor};
 
 pub type FallibleOrder = fxcm::Result<fxcm::Order>;
 
@@ -38,18 +38,29 @@ impl Model {
         Ok(Self { t2v, mgu, out })
     }
 
-    /// Dimension of the input.
-    fn in_dim(&self) -> fxcm::Result<i64> {
-        self.mgu.in_dim()
+    /// Returns the input size.
+    fn in_size(&self) -> fxcm::Result<i64> {
+        self.mgu.in_size()
+    }
+
+    /// Returns the non hidden output size.
+    fn out_size(&self) -> fxcm::Result<i64> {
+        Ok(self.out.bs.size1()?)
     }
 }
 
 impl nn::Module for Model {
     fn forward(&self, xs: &Tensor) -> Tensor {
-        let h = self
-            .mgu
-            .forward(&Tensor::cat(&[&self.t2v.forward(&xs.get(0)), xs], 0));
-        Tensor::cat(&[self.out.forward(&h), h], 0)
+        let h = self.mgu.forward(&Tensor::cat(
+            &[&self.t2v.forward(&xs.get(0)), xs],
+            (xs.dim() - 1)
+                .try_into()
+                .expect("invalid model input dimension"),
+        ));
+        let n = (h.dim() - 1)
+            .try_into()
+            .expect("invalid model output dimension");
+        Tensor::cat(&[self.out.forward(&h), h], n)
     }
 }
 
@@ -78,8 +89,8 @@ impl Mgu {
         Self { f, h }
     }
 
-    /// Dimension of the input.
-    fn in_dim(&self) -> fxcm::Result<i64> {
+    /// Returns the input size.
+    fn in_size(&self) -> fxcm::Result<i64> {
         Ok(self.f.ws.size2()?.0)
     }
 }
@@ -87,10 +98,21 @@ impl Mgu {
 impl nn::Module for Mgu {
     fn forward(&self, xs: &Tensor) -> Tensor {
         let f = self.f.forward(xs).sigmoid();
-        let mut t = xs.tensor_split1(&[xs.size1().unwrap() - self.f.bs.size1().unwrap()], 0);
+        let mut t = xs.tensor_split_indices(
+            &[xs.size().last().expect("xs should not be empty")
+                - self.f.bs.size1().expect("f bias should be a vector")],
+            (xs.dim() - 1)
+                .try_into()
+                .expect("invalid mgu input dimension"),
+        );
         let h = self
             .h
-            .forward(&Tensor::cat(&[&t[0], &(&f * &t[1])], 0))
+            .forward(&Tensor::cat(
+                &[&t[0], &(&f * &t[1])],
+                (t[0].dim() - 1)
+                    .try_into()
+                    .expect("invalid mgu output dimension"),
+            ))
             .tanh();
         t[1] *= 1 - &f;
         t[1] += f * h;
@@ -159,7 +181,7 @@ impl TryFrom<fxcm::Currency> for MrMagoo {
         let vs = nn::VarStore::new(Device::cuda_if_available());
         let optimizer = nn::AdamW::default().build(&vs, 1e-3)?;
         let model = Model::new(&vs.root(), i.try_into()?, 16, 16, o.try_into()?)?;
-        let state = Tensor::zeros(&[model.in_dim()?], options());
+        let state = Tensor::zeros(&[model.in_size()?], options());
         Ok(Self {
             waiting: false,
             ready: false,
@@ -176,15 +198,18 @@ impl TryFrom<fxcm::Currency> for MrMagoo {
 
 impl Trader for MrMagoo {
     fn on_candle(&mut self, candle: &fxcm::Candle) -> fxcm::Result<()> {
-        /*if self.remaining == EnumMap::<fxcm::Symbol, ()>::default().len() {
-            self.state[0] = f32::from(candle.ts);
+        if self.remaining == EnumMap::<fxcm::Symbol, ()>::default().len().try_into()? {
+            self.state = self.state.index_fill_(self.state.dim() - 1, &0.into(), candle.ts.timestamp());
         }
-        self.state[2 * candle.symbol.to_usize() + 1] = f32::from(candle.bid);
-        self.state[2 * candle.symbol.to_usize() + 2] = f32::from(candle.ask);
+        let ix = 2 * i64::try_from(Enum::<()>::into_usize(candle.symbol))? + 1;
+        self.state = self.state.index_fill_(self.state.dim() - 1, &ix.into(), candle.bid.to_f64().ok_or(fxcm::Error::F64(candle.bid))?);
+        self.state = self.state.index_fill_(self.state.dim() - 1, &(ix + 1).into(), candle.ask.to_f64().ok_or(fxcm::Error::F64(candle.ask))?);
         self.remaining -= 1;
         if self.remaining == 0 {
             let pred = self.model.forward(&self.state);
-        }*/
+            let t = pred.tensor_split_indices(&[self.model.out_size()?], pred.dim()? - 1);
+            self.state = self.state.index_copy_(self.state.dim() - 1, , t[1]);
+        }
         if !self.ready && candle.symbol == fxcm::Symbol::EurUsd {
             self.ready = true;
         }

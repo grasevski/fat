@@ -85,7 +85,7 @@ fn main() -> fxcm::Result<()> {
     let (mut real, mut sim, mut dryrun, mut logging, mut history, mut reader) = Default::default();
     let mut exchange: &mut dyn exchange::Exchange = if let Ok(token) = env::var("FXCM") {
         real = Some(exchange::Real::new(opts.stage, token)?);
-        real.as_mut().unwrap()
+        real.as_mut().expect("real exchange not initialized")
     } else {
         let rdr: &mut dyn Iterator<Item = fxcm::FallibleCandle> = if opts.replay {
             let client = Client::new();
@@ -94,28 +94,28 @@ fn main() -> fxcm::Result<()> {
                 opts.begin,
                 opts.end,
             )?);
-            history.as_mut().unwrap()
+            history.as_mut().expect("history not initialized")
         } else {
             reader = Some(
                 Reader::from_reader(io::stdin())
                     .into_deserialize()
                     .map(|x| Ok(x?)),
             );
-            reader.as_mut().unwrap()
+            reader.as_mut().expect("reader not initialized")
         };
         sim = Some(exchange::Sim::new(opts.currency, opts.delay, rdr)?);
-        sim.as_mut().unwrap()
+        sim.as_mut().expect("imposssible")
     };
     let simulated_exchange = exchange::Sim::new(opts.currency, opts.delay, Default::default())?;
     let mut hybrid = exchange::Hybrid::new(opts.train, opts.live, simulated_exchange, exchange);
     exchange = &mut hybrid;
     if opts.noop {
         dryrun = Some(exchange::Dryrun::from(exchange));
-        exchange = dryrun.as_mut().unwrap();
+        exchange = dryrun.as_mut().expect("dryrun exchange not initialized");
     }
     if opts.verbose {
         logging = Some(exchange::Logging::new(io::stdout(), exchange));
-        exchange = logging.as_mut().unwrap();
+        exchange = logging.as_mut().expect("logging exchange not initialized");
     }
     println!(
         "{}",

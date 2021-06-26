@@ -137,6 +137,9 @@ pub enum Error {
     /// Formatting a URL failed.
     Fmt(fmt::Error),
 
+    /// Float conversion failed.
+    F64(Decimal),
+
     /// Incorrect initialization.
     Initialization,
 
@@ -401,7 +404,7 @@ mod tests {
             qty /= q;
             let candle = super::Candle{ts: super::dummy_timestamp(), symbol, bid, ask};
             let mut market = super::Market::from(candle);
-            let mut order = super::Order::new(usize::from(id) + 1, candle.symbol, side, qty).unwrap().unwrap();
+            let mut order = super::Order::new(usize::from(id) + 1, candle.symbol, side, qty).expect("order should be populated").expect("order initialization should not return an error");
             let (b, q) = candle.symbol.currencies();
             let currency = if base {b} else {q};
             assert_eq!(market.pnl(currency), Default::default());
