@@ -33,14 +33,14 @@ pub struct Real {
 
 impl Real {
     /// Initializes connection to FXCM.
-    pub fn new(stage: bool, token: String) -> fxcm::Result<Self> {
+    pub fn new(_stage: bool, _token: String) -> fxcm::Result<Self> {
         // TODO
         Ok(Self {})
     }
 }
 
 impl Exchange for Real {
-    fn insert(&mut self, order: fxcm::Order) -> fxcm::Result<()> {
+    fn insert(&mut self, _: fxcm::Order) -> fxcm::Result<()> {
         // TODO
         Ok(())
     }
@@ -70,7 +70,7 @@ impl<E: Exchange> From<E> for Dryrun<E> {
 }
 
 impl<E: Exchange> Exchange for Dryrun<E> {
-    fn insert(&mut self, order: fxcm::Order) -> fxcm::Result<()> {
+    fn insert(&mut self, _: fxcm::Order) -> fxcm::Result<()> {
         Ok(())
     }
 

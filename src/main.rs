@@ -83,40 +83,41 @@ fn run<E: exchange::Exchange, T: trader::Trader>(
 /// Configures and runs the backtester and or exchange.
 fn main() -> fxcm::Result<()> {
     let opts = Opts::parse();
-    let (mut real, mut sim, mut dryrun, mut logging, mut history, mut reader) = Default::default();
+    let (mut _real, mut _sim, mut _dryrun, mut _logging, mut _history, mut _reader) =
+        Default::default();
     let mut exchange: &mut dyn exchange::Exchange = if let Ok(token) = env::var("FXCM") {
-        real = Some(exchange::Real::new(opts.stage, token)?);
-        real.as_mut().expect("real exchange not initialized")
+        _real = Some(exchange::Real::new(opts.stage, token)?);
+        _real.as_mut().expect("real exchange not initialized")
     } else {
         let rdr: &mut dyn Iterator<Item = fxcm::FallibleCandle> = if opts.replay {
             let client = Client::new();
-            history = Some(history::History::new(
+            _history = Some(history::History::new(
                 move |url| Ok(client.get(url).send()?),
                 opts.begin,
                 opts.end,
             )?);
-            history.as_mut().expect("history not initialized")
+            _history.as_mut().expect("history not initialized")
         } else {
-            reader = Some(
+            _reader = Some(
                 Reader::from_reader(io::stdin())
                     .into_deserialize()
                     .map(|x| Ok(x?)),
             );
-            reader.as_mut().expect("reader not initialized")
+            _reader.as_mut().expect("reader not initialized")
         };
-        sim = Some(exchange::Sim::new(opts.currency, opts.delay, rdr)?);
-        sim.as_mut().expect("imposssible")
+        _sim = Some(exchange::Sim::new(opts.currency, opts.delay, rdr)?);
+        _sim.as_mut().expect("imposssible")
     };
     let simulated_exchange = exchange::Sim::new(opts.currency, opts.delay, Default::default())?;
     let mut hybrid = exchange::Hybrid::new(opts.train, opts.live, simulated_exchange, exchange);
     exchange = &mut hybrid;
     if opts.noop {
-        dryrun = Some(exchange::Dryrun::from(exchange));
-        exchange = dryrun.as_mut().expect("dryrun exchange not initialized");
+        _dryrun = Some(exchange::Dryrun::from(exchange));
+        exchange = _dryrun.as_mut().expect("dryrun exchange not initialized");
     }
     if opts.verbose {
-        logging = Some(exchange::Logging::new(io::stdout(), exchange));
-        exchange = logging.as_mut().expect("logging exchange not initialized");
+        _logging = Some(exchange::Logging::new(io::stdout(), exchange));
+        exchange = _logging.as_mut().expect("logging exchange not initialized");
     }
     println!(
         "{}",

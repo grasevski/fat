@@ -225,7 +225,7 @@ impl Market {
 /// Reinforcement learning agent.
 struct Model<const N: usize, const H: i8> {
     /// PyTorch heap, may be on either GPU or CPU.
-    vs: nn::VarStore,
+    _vs: nn::VarStore,
 
     /// Gradient descent method.
     opt: nn::Optimizer<nn::AdamW>,
@@ -262,18 +262,15 @@ impl<const N: usize, const H: i8> Model<N, H> {
             o.into(),
             Default::default(),
         );
-        let hidden = Tensor::zeros(&[H.into()], options());
-        let actor_out = Tensor::zeros(&[o.into()], options());
-        let probs = Tensor::zeros(&[o.into()], options());
         Ok(Self {
-            vs,
+            _vs: vs,
             opt,
             mgu,
             actor,
             critic,
-            hidden,
-            actor_out,
-            probs,
+            hidden: Tensor::zeros(&[H.into()], options()),
+            actor_out: Tensor::zeros(&[o.into()], options()),
+            probs: Tensor::zeros(&[o.into()], options()),
         })
     }
 
