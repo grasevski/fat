@@ -22,11 +22,6 @@ pub trait Trader {
     fn on_order(&mut self, order: fxcm::Order) -> fxcm::Result<()>;
 }
 
-/// Returns the config used for all tensors.
-fn options() -> (Kind, Device) {
-    (Kind::Float, Device::cuda_if_available())
-}
-
 /// Minimal Gated Unit.
 #[derive(Debug)]
 struct Mgu<const H: i8> {
@@ -225,7 +220,7 @@ impl Market {
 /// Reinforcement learning agent.
 struct Model<const N: usize, const H: i8> {
     /// PyTorch heap, may be on either GPU or CPU.
-    _vs: nn::VarStore,
+    vs: nn::VarStore,
 
     /// Gradient descent method.
     opt: nn::Optimizer<nn::AdamW>,
@@ -247,6 +242,9 @@ struct Model<const N: usize, const H: i8> {
 
     /// Actor output probabilities.
     probs: Tensor,
+
+    /// Randomly chosen action.
+    action: Tensor,
 }
 
 impl<const N: usize, const H: i8> Model<N, H> {
@@ -262,21 +260,26 @@ impl<const N: usize, const H: i8> Model<N, H> {
             o.into(),
             Default::default(),
         );
+        let hidden = vs.root().f_zeros("hidden", &[H.into()])?;
+        let actor_out = vs.root().f_zeros("actor_out", &[o.into()])?;
+        let probs = vs.root().f_zeros("probs", &[o.into()])?;
+        let action = vs.root().f_zeros("action", &[o.into()])?;
         Ok(Self {
-            _vs: vs,
+            vs,
             opt,
             mgu,
             actor,
             critic,
-            hidden: Tensor::zeros(&[H.into()], options()),
-            actor_out: Tensor::zeros(&[o.into()], options()),
-            probs: Tensor::zeros(&[o.into()], options()),
+            hidden,
+            actor_out,
+            probs,
+            action,
         })
     }
 
     /// Learn from current state and choose next action.
-    fn act(&mut self, action: Tensor, reward: Tensor, state: Tensor) -> fxcm::Result<Tensor> {
-        let action_log_probs = action.f_binary_cross_entropy_with_logits::<Tensor>(
+    fn act(&mut self, reward: &[f32], state: &[f32]) -> fxcm::Result<Vec<bool>> {
+        let action_log_probs = self.action.f_binary_cross_entropy_with_logits::<Tensor>(
             &self.actor_out,
             None,
             None,
@@ -288,6 +291,8 @@ impl<const N: usize, const H: i8> Model<N, H> {
             None,
             Reduction::Mean,
         )?;
+        let reward = Tensor::from(reward).to_device(self.vs.device());
+        let state = Tensor::from(state).to_device(self.vs.device());
         let advantages = reward - self.critic.forward(&self.hidden);
         let value_loss = (&advantages * &advantages).f_mean(Kind::Float)?;
         let action_loss = (-advantages.detach() * action_log_probs).f_mean(Kind::Float)?;
@@ -299,7 +304,8 @@ impl<const N: usize, const H: i8> Model<N, H> {
         ));
         self.actor_out = self.actor.forward(&self.hidden);
         self.probs = self.actor_out.f_sigmoid()?;
-        Ok(self.probs.f_bernoulli()?)
+        self.action = self.probs.f_bernoulli()?;
+        Ok(Vec::from(&self.action))
     }
 }
 
@@ -328,9 +334,6 @@ pub struct MrMagoo {
 
     /// PPO agent.
     model: Model<{ fxcm::Symbol::N }, 16>,
-
-    /// Randomly chosen action.
-    action: Tensor,
 }
 
 impl MrMagoo {
@@ -340,7 +343,6 @@ impl MrMagoo {
         let markets = Market::new(currency);
         let candle_aggregator = CandleAggregator::new()?;
         let model = Model::new(markets.len().try_into()?)?;
-        let action = Tensor::zeros(&[markets.len().try_into()?], options());
         Ok(Self {
             seq,
             currency,
@@ -350,7 +352,6 @@ impl MrMagoo {
             qty,
             train,
             model,
-            action,
         })
     }
 }
@@ -386,19 +387,11 @@ impl Trader for MrMagoo {
                 .flat_map(fxcm::Candle::state)
                 .chain(self.markets.iter().map(Market::get_position))
                 .collect();
-            self.action = self.model.act(
-                self.action.shallow_clone(),
-                Tensor::from(reward?.as_slice()),
-                Tensor::from(state?.as_slice()),
-            )?;
+            let action = self.model.act(reward?.as_slice(), state?.as_slice())?;
             let (currency, qty) = (self.currency, self.qty);
             let ret = (self.seq..)
-                .zip(
-                    Vec::<i8>::from(&self.action)
-                        .into_iter()
-                        .zip(&mut self.markets),
-                )
-                .filter_map(|(i, (a, m))| m.act(i, currency, &candles[m.get_symbol()], qty, a == 1))
+                .zip(action.into_iter().zip(&mut self.markets))
+                .filter_map(|(i, (a, m))| m.act(i, currency, &candles[m.get_symbol()], qty, a))
                 .collect();
             self.seq += self.markets.len();
             Ok(ret)
