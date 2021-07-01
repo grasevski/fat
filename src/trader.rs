@@ -6,7 +6,7 @@ use rust_decimal::prelude::{Decimal, One, ToPrimitive};
 use std::convert::{TryFrom, TryInto};
 use tch::{
     nn,
-    nn::{Module, OptimizerConfig},
+    nn::{Module, OptimizerConfig, RNN},
     Device, Kind, Reduction, Tensor,
 };
 
@@ -20,50 +20,6 @@ pub trait Trader {
 
     /// Runs when a trade is executed.
     fn on_order(&mut self, order: fxcm::Order) -> fxcm::Result<()>;
-}
-
-/// Minimal Gated Unit.
-#[derive(Debug)]
-struct Mgu<const H: i8> {
-    /// Forget gate.
-    f: nn::Linear,
-
-    /// Hidden layer.
-    h: nn::Linear,
-}
-
-impl<const H: i8> Mgu<H> {
-    /// Initializes the MGU according to the input and hidden dimensions.
-    fn new(path: &nn::Path, input: i8) -> Self {
-        let n = i64::from(input + H);
-        let f = nn::linear(path / "f", n, H.into(), Default::default());
-        let h = nn::linear(path / "h", n, H.into(), Default::default());
-        Self { f, h }
-    }
-}
-
-impl<const H: i8> nn::Module for Mgu<H> {
-    fn forward(&self, xs: &Tensor) -> Tensor {
-        let f = self.f.forward(xs).sigmoid_();
-        let mut t = xs.tensor_split_indices(
-            &[xs.size().last().expect("xs should not be empty") - i64::from(H)],
-            (xs.dim() - 1)
-                .try_into()
-                .expect("invalid mgu input dimension"),
-        );
-        let h = self
-            .h
-            .forward(&Tensor::cat(
-                &[&t[0], &(&f * &t[1])],
-                (t[0].dim() - 1)
-                    .try_into()
-                    .expect("invalid mgu output dimension"),
-            ))
-            .tanh_();
-        t[1] *= 1 - &f;
-        t[1] += f * h;
-        t[1].shallow_clone()
-    }
 }
 
 /// All candles for a given time slice.
@@ -225,8 +181,8 @@ struct Model<const N: usize, const H: i8> {
     /// Gradient descent method.
     opt: nn::Optimizer<nn::AdamW>,
 
-    /// RNN cell.
-    mgu: Mgu<H>,
+    /// Stateful time series decoder.
+    rnn: nn::GRU,
 
     /// Which position to hold for each symbol.
     actor: nn::Linear,
@@ -235,7 +191,7 @@ struct Model<const N: usize, const H: i8> {
     critic: nn::Linear,
 
     /// Hidden state.
-    hidden: Tensor,
+    hidden: nn::GRUState,
 
     /// Actor output.
     actor_out: Tensor,
@@ -252,7 +208,12 @@ impl<const N: usize, const H: i8> Model<N, H> {
     fn new(o: i8) -> fxcm::Result<Self> {
         let vs = nn::VarStore::new(Device::cuda_if_available());
         let opt = nn::AdamW::default().build(&vs, 1e-3)?;
-        let mgu = Mgu::new(&(&vs.root() / "mgu"), 2 * i8::try_from(N)? + o);
+        let rnn = nn::gru(
+            &(&vs.root() / "rnn"),
+            2 * i64::try_from(N)? + i64::from(o),
+            H.into(),
+            Default::default(),
+        );
         let actor = nn::linear(&vs.root() / "actor", H.into(), o.into(), Default::default());
         let critic = nn::linear(
             &vs.root() / "critic",
@@ -260,14 +221,14 @@ impl<const N: usize, const H: i8> Model<N, H> {
             o.into(),
             Default::default(),
         );
-        let hidden = vs.root().f_zeros("hidden", &[H.into()])?;
+        let hidden = rnn.zero_state(1);
         let actor_out = vs.root().f_zeros("actor_out", &[o.into()])?;
         let probs = vs.root().f_zeros("probs", &[o.into()])?;
         let action = vs.root().f_zeros("action", &[o.into()])?;
         Ok(Self {
             vs,
             opt,
-            mgu,
+            rnn,
             actor,
             critic,
             hidden,
@@ -292,17 +253,14 @@ impl<const N: usize, const H: i8> Model<N, H> {
             Reduction::Mean,
         )?;
         let reward = Tensor::from(reward).to_device(self.vs.device());
-        let state = Tensor::from(state).to_device(self.vs.device());
-        let advantages = reward - self.critic.forward(&self.hidden);
+        let state = Tensor::from(state).unsqueeze(0).to_device(self.vs.device());
+        let advantages = reward - self.critic.forward(&self.hidden.0);
         let value_loss = (&advantages * &advantages).f_mean(Kind::Float)?;
         let action_loss = (-advantages.detach() * action_log_probs).f_mean(Kind::Float)?;
         let loss = value_loss * 0.5 + action_loss - dist_entropy * 0.01;
         self.opt.backward_step_clip(&loss, 0.5);
-        self.hidden = self.mgu.forward(&Tensor::cat(
-            &[&state, &self.hidden],
-            (state.dim() - 1).try_into()?,
-        ));
-        self.actor_out = self.actor.forward(&self.hidden);
+        self.hidden = self.rnn.step(&state, &self.hidden);
+        self.actor_out = self.actor.forward(&self.hidden.0);
         self.probs = self.actor_out.f_sigmoid()?;
         self.action = self.probs.f_bernoulli()?;
         Ok(Vec::from(&self.action))
