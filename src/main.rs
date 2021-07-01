@@ -7,7 +7,7 @@ use clap::Clap;
 use csv::Reader;
 use reqwest::blocking::Client;
 use rust_decimal::prelude::Decimal;
-use std::{convert::TryFrom, env, io};
+use std::{env, io};
 
 mod exchange;
 mod fxcm;
@@ -69,11 +69,12 @@ fn run<E: exchange::Exchange, T: trader::Trader>(
 ) -> fxcm::Result<Decimal> {
     while let Some(event) = exchange.next() {
         match event? {
-            fxcm::Event::Candle(ref candle) => trader.on_candle(candle)?,
-            fxcm::Event::Order(ref order) => trader.on_order(order)?,
-        }
-        while let Some(order) = trader.next() {
-            exchange.insert(order?)?;
+            fxcm::Event::Candle(candle) => {
+                for order in trader.on_candle(candle)? {
+                    exchange.insert(order)?;
+                }
+            }
+            fxcm::Event::Order(order) => trader.on_order(order)?,
         }
     }
     exchange.pnl()
@@ -119,7 +120,10 @@ fn main() -> fxcm::Result<()> {
     }
     println!(
         "{}",
-        run(exchange, trader::MrMagoo::try_from(opts.currency)?)?
+        run(
+            exchange,
+            trader::MrMagoo::new(opts.currency, opts.qty, opts.train)?
+        )?
     );
     Ok(())
 }

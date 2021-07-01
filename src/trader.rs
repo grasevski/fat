@@ -1,67 +1,25 @@
 //! Trader interface and implementations.
 use super::fxcm;
+use arrayvec::ArrayVec;
 use enum_map::{Enum, EnumMap};
-use rust_decimal::prelude::{One, ToPrimitive};
+use rust_decimal::prelude::{Decimal, One, ToPrimitive};
 use std::convert::{TryFrom, TryInto};
-use tch::{nn, nn::{Module, OptimizerConfig}, Device, Kind, Tensor};
-
-pub type FallibleOrder = fxcm::Result<fxcm::Order>;
+use tch::{
+    nn,
+    nn::{Module, OptimizerConfig},
+    Device, Kind, Reduction, Tensor,
+};
 
 /// An algorithmic trading strategy.
-pub trait Trader: Iterator<Item = FallibleOrder> {
+pub trait Trader {
     /// Runs when a candle is received.
-    fn on_candle(&mut self, candle: &fxcm::Candle) -> fxcm::Result<()>;
+    fn on_candle(
+        &mut self,
+        candle: fxcm::Candle,
+    ) -> fxcm::Result<ArrayVec<fxcm::Order, { fxcm::Order::MAX }>>;
 
     /// Runs when a trade is executed.
-    fn on_order(&mut self, order: &fxcm::Order) -> fxcm::Result<()>;
-}
-
-/// PyTorch actor critic model.
-#[derive(Debug)]
-struct Model {
-    /// Spectral time embedding.
-    t2v: Time2Vec,
-
-    /// RNN cell.
-    mgu: Mgu,
-
-    /// Prediction output head.
-    out: nn::Linear,
-}
-
-impl Model {
-    /// Initializes the model.
-    fn new(p: &nn::Path, i: i8, k: i8, h: i8, o: i8) -> fxcm::Result<Self> {
-        let t2v = Time2Vec::new(&(p / "t2v"), k);
-        let mgu = Mgu::new(&(p / "mgu"), i + k, h);
-        let out = nn::linear(&(p / "out"), h.into(), o.into(), Default::default());
-        Ok(Self { t2v, mgu, out })
-    }
-
-    /// Returns the input size.
-    fn in_size(&self) -> fxcm::Result<i64> {
-        self.mgu.in_size()
-    }
-
-    /// Returns the non hidden output size.
-    fn out_size(&self) -> fxcm::Result<i64> {
-        Ok(self.out.bs.size1()?)
-    }
-}
-
-impl nn::Module for Model {
-    fn forward(&self, xs: &Tensor) -> Tensor {
-        let h = self.mgu.forward(&Tensor::cat(
-            &[&self.t2v.forward(&xs.get(0)), xs],
-            (xs.dim() - 1)
-                .try_into()
-                .expect("invalid model input dimension"),
-        ));
-        let n = (h.dim() - 1)
-            .try_into()
-            .expect("invalid model output dimension");
-        Tensor::cat(&[self.out.forward(&h), h], n)
-    }
+    fn on_order(&mut self, order: fxcm::Order) -> fxcm::Result<()>;
 }
 
 /// Returns the config used for all tensors.
@@ -71,7 +29,7 @@ fn options() -> (Kind, Device) {
 
 /// Minimal Gated Unit.
 #[derive(Debug)]
-struct Mgu {
+struct Mgu<const H: i8> {
     /// Forget gate.
     f: nn::Linear,
 
@@ -79,28 +37,21 @@ struct Mgu {
     h: nn::Linear,
 }
 
-impl Mgu {
+impl<const H: i8> Mgu<H> {
     /// Initializes the MGU according to the input and hidden dimensions.
-    fn new(p: &nn::Path, i: i8, h: i8) -> Self {
-        let h = h.into();
-        let n = i64::from(i) + h;
-        let f = nn::linear(p / "f", n, h, Default::default());
-        let h = nn::linear(p / "h", n, h, Default::default());
+    fn new(path: &nn::Path, input: i8) -> Self {
+        let n = i64::from(input + H);
+        let f = nn::linear(path / "f", n, H.into(), Default::default());
+        let h = nn::linear(path / "h", n, H.into(), Default::default());
         Self { f, h }
-    }
-
-    /// Returns the input size.
-    fn in_size(&self) -> fxcm::Result<i64> {
-        Ok(self.f.ws.size2()?.0)
     }
 }
 
-impl nn::Module for Mgu {
+impl<const H: i8> nn::Module for Mgu<H> {
     fn forward(&self, xs: &Tensor) -> Tensor {
-        let f = self.f.forward(xs).sigmoid();
+        let f = self.f.forward(xs).sigmoid_();
         let mut t = xs.tensor_split_indices(
-            &[xs.size().last().expect("xs should not be empty")
-                - self.f.bs.size1().expect("f bias should be a vector")],
+            &[xs.size().last().expect("xs should not be empty") - i64::from(H)],
             (xs.dim() - 1)
                 .try_into()
                 .expect("invalid mgu input dimension"),
@@ -113,126 +64,355 @@ impl nn::Module for Mgu {
                     .try_into()
                     .expect("invalid mgu output dimension"),
             ))
-            .tanh();
+            .tanh_();
         t[1] *= 1 - &f;
         t[1] += f * h;
         t[1].shallow_clone()
     }
 }
 
-/// Fourier transform with learnable phases.
-#[derive(Debug)]
-struct Time2Vec(nn::Linear);
+/// All candles for a given time slice.
+type CandleSet = EnumMap<fxcm::Symbol, fxcm::Candle>;
 
-impl Time2Vec {
-    /// Initializes the embedding according to the desired dimension.
-    fn new(p: &nn::Path, k: i8) -> Self {
-        Self(nn::linear(p / "t2v", 1, k.into(), Default::default()))
+/// State machine to batch up candle updates.
+struct CandleAggregator {
+    /// Remaining candles to receive before outputting a batch.
+    remaining: i8,
+
+    /// Current batch of candles.
+    candles: EnumMap<fxcm::Symbol, Option<fxcm::Candle>>,
+}
+
+impl CandleAggregator {
+    /// Initializes the candle aggregator state.
+    fn new() -> fxcm::Result<Self> {
+        let candles = EnumMap::default();
+        Ok(Self {
+            remaining: candles.len().try_into()?,
+            candles,
+        })
+    }
+
+    /// Reads in the current candle and outputs a batch as necessary.
+    fn next(&mut self, curr: fxcm::Candle) -> fxcm::Result<Option<CandleSet>> {
+        let x = &mut self.candles[curr.symbol];
+        if let Some(prev) = x {
+            return Err(fxcm::Error::Candle {
+                prev: prev.clone(),
+                curr,
+            });
+        }
+        *x = Some(curr);
+        self.remaining -= 1;
+        if self.remaining > 0 {
+            return Ok(None);
+        }
+        let ret: fxcm::Result<ArrayVec<fxcm::Candle, { fxcm::Symbol::N }>> = self
+            .candles
+            .values()
+            .map(|x| x.clone().ok_or(fxcm::Error::Initialization))
+            .collect();
+        let ret = CandleSet::from_array(ret?.into_inner()?);
+        *self = Self::new()?;
+        let ts = ret.values().next().ok_or(fxcm::Error::Initialization)?.ts;
+        if ret.values().all(|x| x.ts == ts) {
+            Ok(Some(ret))
+        } else {
+            Err(fxcm::Error::DateTime(ts))
+        }
     }
 }
 
-impl nn::Module for Time2Vec {
-    fn forward(&self, xs: &Tensor) -> Tensor {
-        self.0.forward(xs).cos()
+/// State machine for the given symbol.
+struct Market {
+    /// The instrument being traded.
+    symbol: fxcm::Symbol,
+
+    /// Whether an investment has been made.
+    position: bool,
+
+    /// In flight volume.
+    qty: Decimal,
+
+    /// Current pnl, for reward calculations.
+    pnl: Decimal,
+
+    /// Tracks the current balance in each respective currency.
+    balance: fxcm::Balance,
+}
+
+impl From<fxcm::Symbol> for Market {
+    fn from(symbol: fxcm::Symbol) -> Self {
+        Self {
+            symbol,
+            position: Default::default(),
+            qty: Default::default(),
+            pnl: Default::default(),
+            balance: Default::default(),
+        }
+    }
+}
+
+impl Market {
+    /// Initializes market state.
+    fn new(currency: fxcm::Currency) -> ArrayVec<Self, { fxcm::Order::MAX }> {
+        (0..fxcm::Symbol::N)
+            .map(<fxcm::Symbol as Enum<()>>::from_usize)
+            .filter(|x| x.has_currency(currency))
+            .map(Into::into)
+            .collect()
+    }
+
+    /// Returns the symbol for this market.
+    fn get_symbol(&self) -> fxcm::Symbol {
+        self.symbol
+    }
+
+    /// Returns the position in the market.
+    fn get_position(&self) -> fxcm::Result<f32> {
+        Ok(f32::from(i8::from(self.position)))
+    }
+
+    /// Determines whether the current orders have completed.
+    fn ready(&self) -> bool {
+        self.qty == Default::default()
+    }
+
+    /// Updates the order status.
+    fn update(&mut self, order: &fxcm::Order) {
+        self.qty -= order.qty;
+        self.balance.update(order);
+    }
+
+    /// Calculates the delta in pnl.
+    fn reward(&self, currency: fxcm::Currency, candle: &fxcm::Candle) -> fxcm::Result<f32> {
+        let ret = self.balance.pnl(currency, candle) - self.pnl;
+        Ok(ret.to_f64().ok_or(fxcm::Error::F64(ret))? as f32)
+    }
+
+    /// Assigns the next action.
+    fn act(
+        &mut self,
+        seq: usize,
+        currency: fxcm::Currency,
+        candle: &fxcm::Candle,
+        qty: Decimal,
+        position: bool,
+    ) -> Option<fxcm::Order> {
+        self.pnl = self.balance.pnl(currency, candle);
+        if self.position == position {
+            return None;
+        }
+        let (side, quotient) = if self.symbol.currencies().0 == currency {
+            let s = if position {
+                fxcm::Side::Bid
+            } else {
+                fxcm::Side::Ask
+            };
+            (s, Decimal::one())
+        } else if position {
+            (fxcm::Side::Ask, candle.bid)
+        } else {
+            (fxcm::Side::Bid, candle.ask)
+        };
+        let order = fxcm::Order::new(seq, self.symbol, side, qty / quotient);
+        self.position = !self.position;
+        self.qty = order.qty;
+        Some(order)
+    }
+}
+
+/// Reinforcement learning agent.
+struct Model<const N: usize, const H: i8> {
+    /// PyTorch heap, may be on either GPU or CPU.
+    vs: nn::VarStore,
+
+    /// Gradient descent method.
+    opt: nn::Optimizer<nn::AdamW>,
+
+    /// RNN cell.
+    mgu: Mgu<H>,
+
+    /// Which position to hold for each symbol.
+    actor: nn::Linear,
+
+    /// Value of the current state.
+    critic: nn::Linear,
+
+    /// Hidden state.
+    hidden: Tensor,
+
+    /// Actor output.
+    actor_out: Tensor,
+
+    /// Actor output probabilities.
+    probs: Tensor,
+}
+
+impl<const N: usize, const H: i8> Model<N, H> {
+    /// Initialize model with number of symbols and number of active markets.
+    fn new(o: i8) -> fxcm::Result<Self> {
+        let vs = nn::VarStore::new(Device::cuda_if_available());
+        let opt = nn::AdamW::default().build(&vs, 1e-3)?;
+        let mgu = Mgu::new(&(&vs.root() / "mgu"), 2 * i8::try_from(N)? + o);
+        let actor = nn::linear(&vs.root() / "actor", H.into(), o.into(), Default::default());
+        let critic = nn::linear(
+            &vs.root() / "critic",
+            H.into(),
+            o.into(),
+            Default::default(),
+        );
+        let hidden = Tensor::zeros(&[H.into()], options());
+        let actor_out = Tensor::zeros(&[o.into()], options());
+        let probs = Tensor::zeros(&[o.into()], options());
+        Ok(Self {
+            vs,
+            opt,
+            mgu,
+            actor,
+            critic,
+            hidden,
+            actor_out,
+            probs,
+        })
+    }
+
+    /// Learn from current state and choose next action.
+    fn act(&mut self, action: Tensor, reward: Tensor, state: Tensor) -> fxcm::Result<Tensor> {
+        let action_log_probs = action.f_binary_cross_entropy_with_logits::<Tensor>(
+            &self.actor_out,
+            None,
+            None,
+            Reduction::Mean,
+        )?;
+        let dist_entropy = self.probs.f_binary_cross_entropy_with_logits::<Tensor>(
+            &self.actor_out,
+            None,
+            None,
+            Reduction::Mean,
+        )?;
+        let advantages = reward - self.critic.forward(&self.hidden);
+        let value_loss = (&advantages * &advantages).f_mean(Kind::Float)?;
+        let action_loss = (-advantages.detach() * action_log_probs).f_mean(Kind::Float)?;
+        let loss = value_loss * 0.5 + action_loss - dist_entropy * 0.01;
+        self.opt.backward_step_clip(&loss, 0.5);
+        self.hidden = self.mgu.forward(&Tensor::cat(
+            &[&state, &self.hidden],
+            (state.dim() - 1).try_into()?,
+        ));
+        self.actor_out = self.actor.forward(&self.hidden);
+        self.probs = self.actor_out.f_sigmoid()?;
+        Ok(self.probs.f_bernoulli()?)
     }
 }
 
 /// Do nothing trader.
 pub struct MrMagoo {
-    /// Whether it is waiting for an order to execute.
-    waiting: bool,
-
-    /// Whether it is ready to send an order.
-    ready: bool,
-
     /// Latest order sequence number.
     seq: usize,
-
-    /// Remaining candle data to receive before being ready.
-    remaining: i8,
 
     /// Settlement currency.
     currency: fxcm::Currency,
 
-    /// PyTorch heap, may be on either GPU or CPU.
-    vs: nn::VarStore,
+    /// State for each symbol being traded.
+    markets: ArrayVec<Market, { fxcm::Order::MAX }>,
 
-    /// Gradient descent method.
-    optimizer: nn::Optimizer<nn::AdamW>,
+    /// State machine to batch up the candle updates.
+    candle_aggregator: CandleAggregator,
 
-    /// Actor critic model.
-    model: Model,
+    /// Market data.
+    candles: Option<CandleSet>,
 
-    /// All state for the trader, including hidden state.
-    state: Tensor,
+    /// Budget for each market.
+    qty: Decimal,
+
+    /// Training iterations remaining.
+    train: i16,
+
+    /// PPO agent.
+    model: Model<{ fxcm::Symbol::N }, 16>,
+
+    /// Randomly chosen action.
+    action: Tensor,
 }
 
-impl TryFrom<fxcm::Currency> for MrMagoo {
-    type Error = fxcm::Error;
-
-    fn try_from(currency: fxcm::Currency) -> fxcm::Result<Self> {
-        let n = EnumMap::<fxcm::Symbol, ()>::default().len();
-        let o = (0..n)
-            .map(|x| <fxcm::Symbol as Enum<()>>::from_usize(x).currencies())
-            .filter(|&(b, q)| b == currency || q == currency)
-            .count()
-            + 1;
-        let i = 2 * n + o;
-        let vs = nn::VarStore::new(Device::cuda_if_available());
-        let optimizer = nn::AdamW::default().build(&vs, 1e-3)?;
-        let model = Model::new(&vs.root(), i.try_into()?, 16, 16, o.try_into()?)?;
-        let state = Tensor::zeros(&[model.in_size()?], options());
+impl MrMagoo {
+    /// Initializes trader with settlement currency and bankroll.
+    pub fn new(currency: fxcm::Currency, qty: Decimal, train: i16) -> fxcm::Result<Self> {
+        let (seq, candles) = Default::default();
+        let markets = Market::new(currency);
+        let candle_aggregator = CandleAggregator::new()?;
+        let model = Model::new(markets.len().try_into()?)?;
+        let action = Tensor::zeros(&[markets.len().try_into()?], options());
         Ok(Self {
-            waiting: false,
-            ready: false,
-            seq: 0,
-            remaining: n.try_into()?,
+            seq,
             currency,
-            vs,
-            optimizer,
+            markets,
+            candle_aggregator,
+            candles,
+            qty,
+            train,
             model,
-            state,
+            action,
         })
     }
 }
 
 impl Trader for MrMagoo {
-    fn on_candle(&mut self, candle: &fxcm::Candle) -> fxcm::Result<()> {
-        if self.remaining == EnumMap::<fxcm::Symbol, ()>::default().len().try_into()? {
-            self.state = self.state.index_fill_(self.state.dim() - 1, &0.into(), candle.ts.timestamp());
+    fn on_candle(
+        &mut self,
+        candle: fxcm::Candle,
+    ) -> fxcm::Result<ArrayVec<fxcm::Order, { fxcm::Order::MAX }>> {
+        if self.train > 0 {
+            self.train -= 1;
+            if self.train == 0 {
+                self.markets = Market::new(self.currency);
+            }
         }
-        let ix = 2 * i64::try_from(Enum::<()>::into_usize(candle.symbol))? + 1;
-        self.state = self.state.index_fill_(self.state.dim() - 1, &ix.into(), candle.bid.to_f64().ok_or(fxcm::Error::F64(candle.bid))?);
-        self.state = self.state.index_fill_(self.state.dim() - 1, &(ix + 1).into(), candle.ask.to_f64().ok_or(fxcm::Error::F64(candle.ask))?);
-        self.remaining -= 1;
-        if self.remaining == 0 {
-            let pred = self.model.forward(&self.state);
-            let t = pred.tensor_split_indices(&[self.model.out_size()?], pred.dim()? - 1);
-            self.state = self.state.index_copy_(self.state.dim() - 1, , t[1]);
+        if let Some(curr) = self.candle_aggregator.next(candle)? {
+            if self.candles.is_some() {
+                return Err(fxcm::Error::CandleSet);
+            }
+            self.candles = Some(curr);
         }
-        if !self.ready && candle.symbol == fxcm::Symbol::EurUsd {
-            self.ready = true;
-        }
-        Ok(())
-    }
-
-    fn on_order(&mut self, order: &fxcm::Order) -> fxcm::Result<()> {
-        self.waiting = false;
-        Ok(())
-    }
-}
-
-impl Iterator for MrMagoo {
-    type Item = FallibleOrder;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if !self.waiting && self.ready {
-            self.waiting = true;
-            self.ready = false;
-            self.seq += 1;
-            fxcm::Order::new(self.seq, fxcm::Symbol::EurUsd, fxcm::Side::Bid, One::one())
+        if let Some(candles) = &self.candles {
+            if !self.markets.iter().all(Market::ready) {
+                return Ok(Default::default());
+            }
+            let reward: fxcm::Result<ArrayVec<f32, { fxcm::Order::MAX }>> = self
+                .markets
+                .iter()
+                .map(|x| x.reward(self.currency, &candles[x.get_symbol()]))
+                .collect();
+            let state: fxcm::Result<ArrayVec<f32, { fxcm::Order::MAX }>> = candles
+                .values()
+                .flat_map(fxcm::Candle::state)
+                .chain(self.markets.iter().map(Market::get_position))
+                .collect();
+            self.action = self.model.act(
+                self.action.shallow_clone(),
+                Tensor::from(reward?.as_slice()),
+                Tensor::from(state?.as_slice()),
+            )?;
+            let (currency, qty) = (self.currency, self.qty);
+            let ret = (self.seq..)
+                .zip(
+                    Vec::<i8>::from(&self.action)
+                        .into_iter()
+                        .zip(&mut self.markets),
+                )
+                .filter_map(|(i, (a, m))| m.act(i, currency, &candles[m.get_symbol()], qty, a == 1))
+                .collect();
+            self.seq += self.markets.len();
+            Ok(ret)
         } else {
-            None
+            Ok(Default::default())
         }
+    }
+
+    fn on_order(&mut self, order: fxcm::Order) -> fxcm::Result<()> {
+        let n = self.markets.len();
+        self.markets[order.id - self.seq - n].update(&order);
+        Ok(())
     }
 }

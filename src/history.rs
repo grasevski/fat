@@ -48,7 +48,7 @@ impl<R: Read, F: FnMut(&str) -> fxcm::Result<R>> Iterator for History<R, F> {
     type Item = fxcm::FallibleCandle;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(candle) = self.buf.values().flat_map(|x| x.0).min() {
+        if let Some(candle) = self.buf.values().flat_map(|x| x.0.clone()).min() {
             let (ref mut c, ref mut l) = self.buf[candle.symbol];
             if let Some(loader) = l {
                 if let Some(x) = loader.next(candle.symbol, self.begin, self.end, &mut self.client)
@@ -132,7 +132,7 @@ impl<R: Read> HistoryLoader<R> {
             }
         }
         if let Some(rdr) = &mut self.rdr {
-            while let Some(candle) = rdr.next() {
+            for candle in rdr {
                 self.empty = false;
                 match candle {
                     Ok(candle) => match fxcm::Candle::new(symbol, candle) {

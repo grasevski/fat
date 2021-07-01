@@ -181,31 +181,32 @@ impl<E: Exchange> Iterator for Hybrid<E> {
             if let Some(event) = self.sim.next() {
                 Some(event)
             } else if self.live != 0 {
-                if self.live > 0 {
-                    self.live -= 1;
+                let ret = self.exchange.next();
+                if let Some(Ok(fxcm::Event::Candle(_))) = ret {
+                    self.live -= i16::from(self.live > 0);
                 }
-                self.exchange.next()
+                ret
             } else {
                 None
             }
         } else if self.sim.needs_candle() {
-            for event in &mut self.exchange {
+            if let Some(event) = self.exchange.next() {
                 match event {
-                    Ok(x) => {
-                        if let fxcm::Event::Candle(candle) = x {
+                    Ok(x) => match x {
+                        fxcm::Event::Candle(candle) => {
                             if self.train > 0 {
                                 self.train -= 1;
                             }
                             self.sim.set_candle(candle);
-                            break;
+                            self.sim.next()
                         }
-                    }
-                    Err(x) => {
-                        return Some(Err(x));
-                    }
+                        fxcm::Event::Order(order) => Some(Err(fxcm::Error::Order(order))),
+                    },
+                    Err(x) => Some(Err(x)),
                 }
+            } else {
+                self.sim.next()
             }
-            self.sim.next()
         } else {
             self.sim.next()
         }
@@ -230,7 +231,7 @@ pub struct Sim<S: Iterator<Item = fxcm::FallibleCandle>> {
     src: S,
 
     /// Order queue.
-    orders: Queue<fxcm::Order, 8>,
+    orders: Queue<fxcm::Order, { fxcm::Order::MAX }>,
 
     /// Market data.
     markets: EnumMap<fxcm::Symbol, Option<fxcm::Market>>,
@@ -251,12 +252,13 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Sim<S> {
     }
 
     fn trade(&mut self, mut order: fxcm::Order) -> Option<FallibleEvent> {
-        if let Some(ref mut market) = self.markets[order.symbol] {
+        let ret = if let Some(ref mut market) = self.markets[order.symbol] {
             market.trade(&mut order);
-            Some(Ok(fxcm::Event::Order(order)))
+            Ok(fxcm::Event::Order(order))
         } else {
-            Some(Err(fxcm::Error::Initialization))
-        }
+            Err(fxcm::Error::Order(order))
+        };
+        Some(ret)
     }
 
     fn needs_candle(&self) -> bool {
@@ -276,7 +278,7 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Exchange for Sim<S> {
             self.orders.enqueue(order)?;
             Ok(())
         } else {
-            Err(fxcm::Error::Initialization)
+            Err(fxcm::Error::Order(order))
         }
     }
 
@@ -304,11 +306,12 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Iterator for Sim<S> {
             if let Some(candle) = self.src.next() {
                 match candle {
                     Ok(candle) => {
-                        self.set_candle(candle);
-                        if let Some(ref mut market) = self.markets[candle.symbol] {
+                        let symbol = candle.symbol;
+                        self.set_candle(candle.clone());
+                        if let Some(ref mut market) = self.markets[symbol] {
                             market.update(candle);
                         } else {
-                            self.markets[candle.symbol] = Some(candle.into());
+                            self.markets[symbol] = Some(candle.into());
                         }
                     }
                     Err(e) => {
@@ -317,7 +320,7 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Iterator for Sim<S> {
                 }
             }
         }
-        if let Some(candle) = self.candle {
+        if let Some(candle) = self.candle.clone() {
             if let Some(order) = self.orders.peek() {
                 if order.ts < candle.ts {
                     return if let Some(order) = self.orders.dequeue() {
