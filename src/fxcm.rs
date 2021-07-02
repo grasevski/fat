@@ -104,7 +104,6 @@ impl Order {
 
     /// Creates a new order to be inserted by the trader.
     pub fn new(id: usize, symbol: Symbol, side: Side, qty: Decimal) -> Self {
-        assert_ne!(id, Default::default());
         assert_ne!(qty, Default::default());
         assert!(qty > Default::default());
         Self {
@@ -146,9 +145,6 @@ pub enum Error {
     /// Invalid action arrayvec size.
     ArrayVec(ArrayVec<f32, { Order::MAX }>),
 
-    /// Invalid candle update.
-    Candle { prev: Candle, curr: Candle },
-
     /// Autotrader has fallen too far behind.
     CandleSet,
 
@@ -157,9 +153,6 @@ pub enum Error {
 
     /// Parsing csv failed.
     Csv(csv::Error),
-
-    /// Invalid candle timing.
-    DateTime(DateTime<Utc>),
 
     /// Formatting a URL failed.
     Fmt(fmt::Error),

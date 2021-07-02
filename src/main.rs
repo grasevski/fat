@@ -91,18 +91,13 @@ fn main() -> fxcm::Result<()> {
     } else {
         let rdr: &mut dyn Iterator<Item = fxcm::FallibleCandle> = if opts.replay {
             let client = Client::new();
-            _history = Some(history::History::new(
-                move |url| Ok(client.get(url).send()?),
-                opts.begin,
-                opts.end,
-            )?);
+            let history =
+                history::History::new(move |url| Ok(client.get(url).send()?), opts.begin, opts.end);
+            _history = Some(history?);
             _history.as_mut().expect("history not initialized")
         } else {
-            _reader = Some(
-                Reader::from_reader(io::stdin())
-                    .into_deserialize()
-                    .map(|x| Ok(x?)),
-            );
+            let reader = Reader::from_reader(io::stdin());
+            _reader = Some(reader.into_deserialize().map(|x| Ok(x?)));
             _reader.as_mut().expect("reader not initialized")
         };
         _sim = Some(exchange::Sim::new(opts.currency, opts.delay, rdr)?);
@@ -119,12 +114,7 @@ fn main() -> fxcm::Result<()> {
         _logging = Some(exchange::Logging::new(io::stdout(), exchange));
         exchange = _logging.as_mut().expect("logging exchange not initialized");
     }
-    println!(
-        "{}",
-        run(
-            exchange,
-            trader::MrMagoo::new(opts.currency, opts.qty, opts.train)?
-        )?
-    );
+    let trader = trader::MrMagoo::new(opts.currency, opts.qty, opts.train)?;
+    println!("{}", run(exchange, trader)?);
     Ok(())
 }

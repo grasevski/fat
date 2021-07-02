@@ -1,6 +1,7 @@
 //! Trader interface and implementations.
 use super::fxcm;
 use arrayvec::ArrayVec;
+use chrono::{DateTime, Utc};
 use enum_map::{Enum, EnumMap};
 use rust_decimal::prelude::{Decimal, One, ToPrimitive};
 use std::convert::{TryFrom, TryInto};
@@ -26,51 +27,43 @@ pub trait Trader {
 type CandleSet = EnumMap<fxcm::Symbol, fxcm::Candle>;
 
 /// State machine to batch up candle updates.
+#[derive(Default)]
 struct CandleAggregator {
-    /// Remaining candles to receive before outputting a batch.
-    remaining: i8,
+    /// Current timestamp.
+    watermark: Option<DateTime<Utc>>,
 
     /// Current batch of candles.
     candles: EnumMap<fxcm::Symbol, Option<fxcm::Candle>>,
 }
 
 impl CandleAggregator {
-    /// Initializes the candle aggregator state.
-    fn new() -> fxcm::Result<Self> {
-        let candles = EnumMap::default();
-        Ok(Self {
-            remaining: candles.len().try_into()?,
-            candles,
-        })
-    }
-
     /// Reads in the current candle and outputs a batch as necessary.
-    fn next(&mut self, curr: fxcm::Candle) -> fxcm::Result<Option<CandleSet>> {
-        let x = &mut self.candles[curr.symbol];
-        if let Some(prev) = x {
-            return Err(fxcm::Error::Candle {
-                prev: prev.clone(),
-                curr,
-            });
+    fn next(&mut self, candle: fxcm::Candle) -> fxcm::Result<Option<CandleSet>> {
+        let symbol = candle.symbol;
+        if let Some(ref mut watermark) = self.watermark {
+            if candle.ts <= *watermark {
+                self.candles[symbol] = Some(candle);
+                return Ok(None);
+            }
+            let ret: fxcm::Result<ArrayVec<fxcm::Candle, { fxcm::Symbol::N }>> = self
+                .candles
+                .values()
+                .map(|x| x.clone().ok_or(fxcm::Error::Initialization))
+                .collect();
+            *watermark = candle.ts;
+            self.candles[symbol] = Some(candle);
+            return Ok(Some(CandleSet::from_array(ret?.into_inner()?)));
+        } else if self.candles.values().all(Option::is_some) {
+            let watermark = self
+                .candles
+                .values()
+                .filter_map(|x| x.as_ref().map(|c| c.ts))
+                .max()
+                .ok_or(fxcm::Error::Initialization)?;
+            self.watermark = Some(watermark);
         }
-        *x = Some(curr);
-        self.remaining -= 1;
-        if self.remaining > 0 {
-            return Ok(None);
-        }
-        let ret: fxcm::Result<ArrayVec<fxcm::Candle, { fxcm::Symbol::N }>> = self
-            .candles
-            .values()
-            .map(|x| x.clone().ok_or(fxcm::Error::Initialization))
-            .collect();
-        let ret = CandleSet::from_array(ret?.into_inner()?);
-        *self = Self::new()?;
-        let ts = ret.values().next().ok_or(fxcm::Error::Initialization)?.ts;
-        if ret.values().all(|x| x.ts == ts) {
-            Ok(Some(ret))
-        } else {
-            Err(fxcm::Error::DateTime(ts))
-        }
+        self.candles[symbol] = Some(candle);
+        Ok(None)
     }
 }
 
@@ -222,9 +215,7 @@ impl<const N: usize, const H: i8> Model<N, H> {
             Default::default(),
         );
         let hidden = rnn.zero_state(1);
-        let actor_out = vs.root().f_zeros("actor_out", &[o.into()])?;
-        let probs = vs.root().f_zeros("probs", &[o.into()])?;
-        let action = vs.root().f_zeros("action", &[o.into()])?;
+        let (actor_out, probs, action) = Default::default();
         Ok(Self {
             vs,
             opt,
@@ -240,27 +231,30 @@ impl<const N: usize, const H: i8> Model<N, H> {
 
     /// Learn from current state and choose next action.
     fn act(&mut self, reward: &[f32], state: &[f32]) -> fxcm::Result<Vec<bool>> {
-        let action_log_probs = self.action.f_binary_cross_entropy_with_logits::<Tensor>(
-            &self.actor_out,
-            None,
-            None,
-            Reduction::Mean,
-        )?;
-        let dist_entropy = self.probs.f_binary_cross_entropy_with_logits::<Tensor>(
-            &self.actor_out,
-            None,
-            None,
-            Reduction::Mean,
-        )?;
-        let reward = Tensor::from(reward).to_device(self.vs.device());
+        if self.probs.defined() {
+            let reward = Tensor::from(reward).to_device(self.vs.device());
+            let action_log_probs = self.action.f_binary_cross_entropy_with_logits::<Tensor>(
+                &self.actor_out,
+                None,
+                None,
+                Reduction::Mean,
+            )?;
+            let dist_entropy = self.probs.f_binary_cross_entropy_with_logits::<Tensor>(
+                &self.actor_out,
+                None,
+                None,
+                Reduction::Mean,
+            )?;
+            let advantages = reward - self.critic.forward(&self.hidden.0.f_flatten(0, -1)?);
+            let value_loss = (&advantages * &advantages).f_mean(Kind::Float)?;
+            let action_loss = (-advantages * action_log_probs).f_mean(Kind::Float)?;
+            let loss = value_loss * 0.5 + action_loss - dist_entropy * 0.01;
+            self.opt.backward_step_clip(&loss, 0.5);
+        }
         let state = Tensor::from(state).unsqueeze(0).to_device(self.vs.device());
-        let advantages = reward - self.critic.forward(&self.hidden.0);
-        let value_loss = (&advantages * &advantages).f_mean(Kind::Float)?;
-        let action_loss = (-advantages.detach() * action_log_probs).f_mean(Kind::Float)?;
-        let loss = value_loss * 0.5 + action_loss - dist_entropy * 0.01;
-        self.opt.backward_step_clip(&loss, 0.5);
+        self.hidden.0 = self.hidden.0.f_detach_()?;
         self.hidden = self.rnn.step(&state, &self.hidden);
-        self.actor_out = self.actor.forward(&self.hidden.0);
+        self.actor_out = self.actor.forward(&self.hidden.0.f_flatten(0, -1)?);
         self.probs = self.actor_out.f_sigmoid()?;
         self.action = self.probs.f_bernoulli()?;
         Ok(Vec::from(&self.action))
@@ -291,15 +285,14 @@ pub struct MrMagoo {
     train: i16,
 
     /// PPO agent.
-    model: Model<{ fxcm::Symbol::N }, 16>,
+    model: Model<{ fxcm::Symbol::N }, 64>,
 }
 
 impl MrMagoo {
     /// Initializes trader with settlement currency and bankroll.
     pub fn new(currency: fxcm::Currency, qty: Decimal, train: i16) -> fxcm::Result<Self> {
-        let (seq, candles) = Default::default();
+        let (seq, candles, candle_aggregator) = Default::default();
         let markets = Market::new(currency);
-        let candle_aggregator = CandleAggregator::new()?;
         let model = Model::new(markets.len().try_into()?)?;
         Ok(Self {
             seq,
@@ -331,7 +324,7 @@ impl Trader for MrMagoo {
             }
             self.candles = Some(curr);
         }
-        if let Some(candles) = &self.candles {
+        if let Some(candles) = self.candles.clone() {
             if !self.markets.iter().all(Market::ready) {
                 return Ok(Default::default());
             }
@@ -340,11 +333,12 @@ impl Trader for MrMagoo {
                 .iter()
                 .map(|x| x.reward(self.currency, &candles[x.get_symbol()]))
                 .collect();
-            let state: fxcm::Result<ArrayVec<f32, { fxcm::Order::MAX }>> = candles
-                .values()
-                .flat_map(fxcm::Candle::state)
-                .chain(self.markets.iter().map(Market::get_position))
-                .collect();
+            let state: fxcm::Result<ArrayVec<f32, { 2 * fxcm::Symbol::N + fxcm::Order::MAX }>> =
+                candles
+                    .values()
+                    .flat_map(fxcm::Candle::state)
+                    .chain(self.markets.iter().map(Market::get_position))
+                    .collect();
             let action = self.model.act(reward?.as_slice(), state?.as_slice())?;
             let (currency, qty) = (self.currency, self.qty);
             let ret = (self.seq..)
@@ -352,6 +346,7 @@ impl Trader for MrMagoo {
                 .filter_map(|(i, (a, m))| m.act(i, currency, &candles[m.get_symbol()], qty, a))
                 .collect();
             self.seq += self.markets.len();
+            self.candles = None;
             Ok(ret)
         } else {
             Ok(Default::default())
@@ -360,7 +355,7 @@ impl Trader for MrMagoo {
 
     fn on_order(&mut self, order: fxcm::Order) -> fxcm::Result<()> {
         let n = self.markets.len();
-        self.markets[order.id - self.seq - n].update(&order);
+        self.markets[order.id + n - self.seq].update(&order);
         Ok(())
     }
 }

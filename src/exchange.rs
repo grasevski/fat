@@ -96,10 +96,8 @@ pub struct Logging<W: Write, E: Exchange> {
 impl<W: Write, E: Exchange> Logging<W, E> {
     /// Initializes logging with given exchange and output stream.
     pub fn new(wtr: W, exchange: E) -> Self {
-        Self {
-            dst: Writer::from_writer(wtr),
-            exchange,
-        }
+        let dst = Writer::from_writer(wtr);
+        Self { dst, exchange }
     }
 }
 
@@ -240,14 +238,15 @@ pub struct Sim<S: Iterator<Item = fxcm::FallibleCandle>> {
 impl<S: Iterator<Item = fxcm::FallibleCandle>> Sim<S> {
     /// Initializes simulated exchange from config.
     pub fn new(currency: fxcm::Currency, delay: humantime::Duration, src: S) -> fxcm::Result<Self> {
+        let (ts, candle, markets) = Default::default();
         Ok(Self {
             currency,
             delay: Duration::seconds(delay.as_secs().try_into()?),
-            ts: Default::default(),
-            candle: Default::default(),
+            ts,
+            candle,
             src,
             orders: Queue::new(),
-            markets: Default::default(),
+            markets,
         })
     }
 
@@ -267,7 +266,13 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Sim<S> {
 
     fn set_candle(&mut self, candle: fxcm::Candle) {
         self.ts = Some(candle.ts);
-        self.candle = Some(candle);
+        self.candle = Some(candle.clone());
+        let symbol = candle.symbol;
+        if let Some(ref mut market) = self.markets[symbol] {
+            market.update(candle);
+        } else {
+            self.markets[symbol] = Some(candle.into());
+        }
     }
 }
 
@@ -286,13 +291,7 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Exchange for Sim<S> {
         let ret: Decimal = self
             .markets
             .values()
-            .map(|market| {
-                if let Some(market) = market {
-                    market.pnl(self.currency)
-                } else {
-                    Default::default()
-                }
-            })
+            .filter_map(|m| m.as_ref().map(|x| x.pnl(self.currency)))
             .sum();
         Ok(ret)
     }
@@ -306,13 +305,7 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Iterator for Sim<S> {
             if let Some(candle) = self.src.next() {
                 match candle {
                     Ok(candle) => {
-                        let symbol = candle.symbol;
-                        self.set_candle(candle.clone());
-                        if let Some(ref mut market) = self.markets[symbol] {
-                            market.update(candle);
-                        } else {
-                            self.markets[symbol] = Some(candle.into());
-                        }
+                        self.set_candle(candle);
                     }
                     Err(e) => {
                         return Some(Err(e));
