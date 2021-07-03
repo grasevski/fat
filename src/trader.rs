@@ -184,7 +184,7 @@ impl Market {
 }
 
 /// Reinforcement learning agent.
-struct Model<O: nn::OptimizerConfig, const N: usize, const H: i8> {
+struct Model<O: nn::OptimizerConfig, const N: usize, const H: u8> {
     /// PyTorch heap, may be on either GPU or CPU.
     vs: nn::VarStore,
 
@@ -213,7 +213,7 @@ struct Model<O: nn::OptimizerConfig, const N: usize, const H: i8> {
     action: Tensor,
 }
 
-impl<O: nn::OptimizerConfig, const N: usize, const H: i8> Model<O, N, H> {
+impl<O: nn::OptimizerConfig, const N: usize, const H: u8> Model<O, N, H> {
     /// Initialize model with number of symbols and number of active markets.
     fn new(cfg: O, o: i8) -> fxcm::Result<Self> {
         let vs = nn::VarStore::new(Device::cuda_if_available());
@@ -313,7 +313,7 @@ pub struct MrMagoo {
     train: i32,
 
     /// PPO agent.
-    model: Model<nn::RmsProp, { fxcm::Symbol::N }, 127>,
+    model: Model<nn::RmsProp, { fxcm::Symbol::N }, 1>,
 }
 
 impl MrMagoo {
