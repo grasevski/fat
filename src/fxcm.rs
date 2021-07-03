@@ -462,13 +462,21 @@ mod tests {
             let currency = if base {b} else {q};
             assert_eq!(market.pnl(currency), Default::default());
             market.trade(&mut order);
-            assert!(market.pnl(currency) <= Default::default());
+            if bid == ask {
+                assert_eq!(market.pnl(currency), Default::default());
+            } else {
+                assert!(market.pnl(currency) < Default::default());
+            }
             order.side = match order.side {
                 super::Side::Bid => super::Side::Ask,
                 super::Side::Ask => super::Side::Bid,
             };
             market.trade(&mut order);
-            assert!(market.pnl(currency) <= Default::default());
+            if bid == ask {
+                assert_eq!(market.pnl(currency), Default::default());
+            } else {
+                assert!(market.pnl(currency) < Default::default());
+            }
         }
     }
 }
