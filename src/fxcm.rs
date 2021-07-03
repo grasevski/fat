@@ -457,7 +457,7 @@ mod tests {
             qty /= q;
             let candle = super::Candle{ts: super::dummy_timestamp(), symbol, bid, ask};
             let mut market = super::Market::from(candle);
-            let mut order = super::Order::new(usize::from(id) + 1, symbol, side, qty);
+            let mut order = super::Order::new(id.into(), symbol, side, qty);
             let (b, q) = symbol.currencies();
             let currency = if base {b} else {q};
             assert_eq!(market.pnl(currency), Default::default());
