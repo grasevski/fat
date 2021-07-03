@@ -6,8 +6,8 @@ use enum_map::{Enum, EnumMap};
 use rust_decimal::prelude::{Decimal, One, ToPrimitive};
 use std::convert::{TryFrom, TryInto};
 use tch::{
-    nn,
-    nn::{Module, OptimizerConfig, RNN},
+    manual_seed, nn,
+    nn::{Module, RNN},
     Device, Kind, Reduction, Tensor,
 };
 
@@ -21,6 +21,23 @@ pub trait Trader {
 
     /// Runs when a trade is executed.
     fn on_order(&mut self, order: fxcm::Order) -> fxcm::Result<()>;
+}
+
+/// Dummy do nothing trader.
+#[derive(Default)]
+pub struct Dryrun {}
+
+impl Trader for Dryrun {
+    fn on_candle(
+        &mut self,
+        _: fxcm::Candle,
+    ) -> fxcm::Result<ArrayVec<fxcm::Order, { fxcm::Order::MAX }>> {
+        Ok(Default::default())
+    }
+
+    fn on_order(&mut self, _: fxcm::Order) -> fxcm::Result<()> {
+        Ok(())
+    }
 }
 
 /// All candles for a given time slice.
@@ -167,21 +184,21 @@ impl Market {
 }
 
 /// Reinforcement learning agent.
-struct Model<const N: usize, const H: i8> {
+struct Model<O: nn::OptimizerConfig, const N: usize, const H: i8> {
     /// PyTorch heap, may be on either GPU or CPU.
     vs: nn::VarStore,
 
     /// Gradient descent method.
-    opt: nn::Optimizer<nn::AdamW>,
+    opt: nn::Optimizer<O>,
 
     /// Stateful time series decoder.
     rnn: nn::GRU,
 
     /// Which position to hold for each symbol.
-    actor: nn::Linear,
+    actor: nn::Sequential,
 
     /// Value of the current state.
-    critic: nn::Linear,
+    critic: nn::Sequential,
 
     /// Hidden state.
     hidden: nn::GRUState,
@@ -196,24 +213,24 @@ struct Model<const N: usize, const H: i8> {
     action: Tensor,
 }
 
-impl<const N: usize, const H: i8> Model<N, H> {
+impl<O: nn::OptimizerConfig, const N: usize, const H: i8> Model<O, N, H> {
     /// Initialize model with number of symbols and number of active markets.
-    fn new(o: i8) -> fxcm::Result<Self> {
+    fn new(cfg: O, o: i8) -> fxcm::Result<Self> {
         let vs = nn::VarStore::new(Device::cuda_if_available());
-        let opt = nn::AdamW::default().build(&vs, 1e-3)?;
+        let opt = cfg.build(&vs, 1e-1)?;
+        let cfg = nn::RNNConfig {
+            num_layers: 1,
+            dropout: 0.0,
+            ..Default::default()
+        };
         let rnn = nn::gru(
             &(&vs.root() / "rnn"),
             2 * i64::try_from(N)? + i64::from(o),
             H.into(),
-            Default::default(),
+            cfg,
         );
-        let actor = nn::linear(&vs.root() / "actor", H.into(), o.into(), Default::default());
-        let critic = nn::linear(
-            &vs.root() / "critic",
-            H.into(),
-            o.into(),
-            Default::default(),
-        );
+        let actor = Self::predictor(&vs.root() / "actor", cfg.num_layers, o);
+        let critic = Self::predictor(&vs.root() / "critic", cfg.num_layers, o);
         let hidden = rnn.zero_state(1);
         let (actor_out, probs, action) = Default::default();
         Ok(Self {
@@ -227,6 +244,17 @@ impl<const N: usize, const H: i8> Model<N, H> {
             probs,
             action,
         })
+    }
+
+    /// Prediction head multi layer perceptron.
+    fn predictor(path: nn::Path, num_layers: i64, o: i8) -> nn::Sequential {
+        let fc = nn::linear(
+            path,
+            num_layers * i64::from(H),
+            o.into(),
+            Default::default(),
+        );
+        nn::seq().add_fn(|xs| xs.flatten(0, -1)).add(fc)
     }
 
     /// Learn from current state and choose next action.
@@ -245,7 +273,7 @@ impl<const N: usize, const H: i8> Model<N, H> {
                 None,
                 Reduction::Mean,
             )?;
-            let advantages = reward - self.critic.forward(&self.hidden.0.f_flatten(0, -1)?);
+            let advantages = reward - self.critic.forward(&self.hidden.0);
             let value_loss = (&advantages * &advantages).f_mean(Kind::Float)?;
             let action_loss = (-advantages * action_log_probs).f_mean(Kind::Float)?;
             let loss = value_loss * 0.5 + action_loss - dist_entropy * 0.01;
@@ -254,7 +282,7 @@ impl<const N: usize, const H: i8> Model<N, H> {
         let state = Tensor::from(state).unsqueeze(0).to_device(self.vs.device());
         self.hidden.0 = self.hidden.0.f_detach_()?;
         self.hidden = self.rnn.step(&state, &self.hidden);
-        self.actor_out = self.actor.forward(&self.hidden.0.f_flatten(0, -1)?);
+        self.actor_out = self.actor.forward(&self.hidden.0);
         self.probs = self.actor_out.f_sigmoid()?;
         self.action = self.probs.f_bernoulli()?;
         Ok(Vec::from(&self.action))
@@ -282,18 +310,24 @@ pub struct MrMagoo {
     qty: Decimal,
 
     /// Training iterations remaining.
-    train: i16,
+    train: i32,
 
     /// PPO agent.
-    model: Model<{ fxcm::Symbol::N }, 64>,
+    model: Model<nn::RmsProp, { fxcm::Symbol::N }, 127>,
 }
 
 impl MrMagoo {
     /// Initializes trader with settlement currency and bankroll.
-    pub fn new(currency: fxcm::Currency, qty: Decimal, train: i16) -> fxcm::Result<Self> {
+    pub fn new(
+        currency: fxcm::Currency,
+        qty: Decimal,
+        train: i32,
+        seed: i64,
+    ) -> fxcm::Result<Self> {
         let (seq, candles, candle_aggregator) = Default::default();
         let markets = Market::new(currency);
-        let model = Model::new(markets.len().try_into()?)?;
+        manual_seed(seed);
+        let model = Model::new(Default::default(), markets.len().try_into()?)?;
         Ok(Self {
             seq,
             currency,

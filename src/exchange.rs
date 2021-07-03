@@ -60,33 +60,6 @@ impl Iterator for Real {
     }
 }
 
-/// An exchange that ignores orders.
-pub struct Dryrun<E: Exchange>(E);
-
-impl<E: Exchange> From<E> for Dryrun<E> {
-    fn from(exchange: E) -> Self {
-        Self(exchange)
-    }
-}
-
-impl<E: Exchange> Exchange for Dryrun<E> {
-    fn insert(&mut self, _: fxcm::Order) -> fxcm::Result<()> {
-        Ok(())
-    }
-
-    fn pnl(&self) -> fxcm::Result<Decimal> {
-        self.0.pnl()
-    }
-}
-
-impl<E: Exchange> Iterator for Dryrun<E> {
-    type Item = FallibleEvent;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0.next()
-    }
-}
-
 /// An exchange with verbose logging.
 pub struct Logging<W: Write, E: Exchange> {
     dst: Writer<W>,
@@ -128,10 +101,10 @@ impl<W: Write, E: Exchange> Iterator for Logging<W, E> {
 /// Runs training on simulated exchange, then live on actual exchange.
 pub struct Hybrid<E: Exchange> {
     /// Number of iterations to run on simulated exchange, or negative to run indefinitely.
-    train: i16,
+    train: i32,
 
     /// Number of iterations to run on live exchange, or negative to run indefinitely.
-    live: i16,
+    live: i32,
 
     /// Simulated exchange.
     sim: Sim<iter::Empty<fxcm::FallibleCandle>>,
@@ -143,8 +116,8 @@ pub struct Hybrid<E: Exchange> {
 impl<E: Exchange> Hybrid<E> {
     /// Initializes based on number of training and live iterations.
     pub fn new(
-        train: i16,
-        live: i16,
+        train: i32,
+        live: i32,
         sim: Sim<iter::Empty<fxcm::FallibleCandle>>,
         exchange: E,
     ) -> Self {
@@ -181,7 +154,7 @@ impl<E: Exchange> Iterator for Hybrid<E> {
             } else if self.live != 0 {
                 let ret = self.exchange.next();
                 if let Some(Ok(fxcm::Event::Candle(_))) = ret {
-                    self.live -= i16::from(self.live > 0);
+                    self.live -= i32::from(self.live > 0);
                 }
                 ret
             } else {

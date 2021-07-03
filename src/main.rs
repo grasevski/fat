@@ -31,11 +31,11 @@ struct Opts {
 
     /// Number of iterations to simulate.
     #[clap(short, long, default_value = "0")]
-    train: i16,
+    train: i32,
 
     /// Number of iterations to run on live exchange.
     #[clap(short, long, default_value = "-1")]
-    live: i16,
+    live: i32,
 
     /// Dont send any orders.
     #[clap(short, long)]
@@ -60,12 +60,16 @@ struct Opts {
     /// End date for historical data.
     #[clap(short, long)]
     end: Option<NaiveDate>,
+
+    /// Random number generator seed.
+    #[clap(short, long, default_value = "0")]
+    gen: i64,
 }
 
 /// Connects trader to exchange and runs to completion.
-fn run<E: exchange::Exchange, T: trader::Trader>(
-    mut exchange: E,
-    mut trader: T,
+fn run(
+    exchange: &mut dyn exchange::Exchange,
+    trader: &mut dyn trader::Trader,
 ) -> fxcm::Result<Decimal> {
     while let Some(event) = exchange.next() {
         match event? {
@@ -83,8 +87,7 @@ fn run<E: exchange::Exchange, T: trader::Trader>(
 /// Configures and runs the backtester and or exchange.
 fn main() -> fxcm::Result<()> {
     let opts = Opts::parse();
-    let (mut _real, mut _sim, mut _dryrun, mut _logging, mut _history, mut _reader) =
-        Default::default();
+    let (mut _real, mut _sim, mut _logging, mut _history, mut _reader) = Default::default();
     let mut exchange: &mut dyn exchange::Exchange = if let Ok(token) = env::var("FXCM") {
         _real = Some(exchange::Real::new(opts.stage, token)?);
         _real.as_mut().expect("real exchange not initialized")
@@ -106,15 +109,13 @@ fn main() -> fxcm::Result<()> {
     let simulated_exchange = exchange::Sim::new(opts.currency, opts.delay, Default::default())?;
     let mut hybrid = exchange::Hybrid::new(opts.train, opts.live, simulated_exchange, exchange);
     exchange = &mut hybrid;
-    if opts.noop {
-        _dryrun = Some(exchange::Dryrun::from(exchange));
-        exchange = _dryrun.as_mut().expect("dryrun exchange not initialized");
-    }
     if opts.verbose {
         _logging = Some(exchange::Logging::new(io::stdout(), exchange));
         exchange = _logging.as_mut().expect("logging exchange not initialized");
     }
-    let trader = trader::MrMagoo::new(opts.currency, opts.qty, opts.train)?;
+    let mut dryrun = trader::Dryrun::default();
+    let mut mrmagoo = trader::MrMagoo::new(opts.currency, opts.qty, opts.train, opts.gen)?;
+    let trader: &mut dyn trader::Trader = if opts.noop { &mut dryrun } else { &mut mrmagoo };
     println!("{}", run(exchange, trader)?);
     Ok(())
 }

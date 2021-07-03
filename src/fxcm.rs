@@ -6,7 +6,7 @@ use num_derive::FromPrimitive;
 use proptest_derive::Arbitrary;
 use rust_decimal::prelude::{Decimal, One, ToPrimitive};
 use serde::{Deserialize, Serialize};
-use std::{fmt, io, num, result};
+use std::{cmp, fmt, io, num, result};
 use strum_macros::{Display, EnumString};
 use tch::TchError;
 
@@ -50,7 +50,6 @@ impl Candle {
         assert_ne!(historical.ask_open, Default::default());
         assert!(historical.bid_open > Default::default());
         assert!(historical.ask_open > Default::default());
-        assert!(historical.ask_open > historical.bid_open);
         let ts = NaiveDateTime::parse_from_str(&historical.date_time, "%m/%d/%Y %H:%M:%S%.f")?;
         let ts = DateTime::from_utc(ts, Utc);
         Ok(Self {
@@ -381,18 +380,18 @@ impl Balance {
         let (base, quote) = candle.symbol.currencies();
         if currency == base {
             let p = if self.quote > Default::default() {
-                candle.bid
+                cmp::min
             } else {
-                candle.ask
+                cmp::max
             };
-            self.base + self.quote * p
+            self.base + self.quote * p(candle.bid, candle.ask)
         } else if currency == quote {
             let p = if self.base > Default::default() {
-                candle.ask
+                cmp::max
             } else {
-                candle.bid
+                cmp::min
             };
-            self.quote + self.base / p
+            self.quote + self.base / p(candle.bid, candle.ask)
         } else {
             assert_eq!(self.base, Default::default());
             assert_eq!(self.quote, Default::default());
@@ -428,9 +427,9 @@ impl Market {
     /// Updates the current position based on the given trade.
     pub fn trade(&mut self, order: &mut Order) {
         order.price = match order.side {
-            Side::Bid => self.candle.ask,
-            Side::Ask => self.candle.bid,
-        };
+            Side::Bid => cmp::max,
+            Side::Ask => cmp::min,
+        }(self.candle.bid, self.candle.ask);
         self.balance.update(order);
     }
 
@@ -444,7 +443,6 @@ impl Market {
 mod tests {
     use proptest::prelude::proptest;
     use rust_decimal::prelude::{Decimal, One};
-    use std::mem;
 
     proptest! {
         #[test]
@@ -454,11 +452,6 @@ mod tests {
             bid += Decimal::one();
             ask += Decimal::one();
             qty += Decimal::one();
-            if bid == ask {
-                ask += Decimal::one();
-            } else if bid > ask {
-                mem::swap(&mut bid, &mut ask);
-            }
             bid /= q;
             ask /= q;
             qty /= q;
