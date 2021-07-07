@@ -411,10 +411,8 @@ pub struct Market {
 
 impl From<Candle> for Market {
     fn from(candle: Candle) -> Self {
-        Self {
-            candle,
-            balance: Default::default(),
-        }
+        let balance = Default::default();
+        Self { candle, balance }
     }
 }
 

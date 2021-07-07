@@ -44,8 +44,10 @@ impl Trader for Dryrun {
 type CandleSet = EnumMap<fxcm::Symbol, fxcm::Candle>;
 
 /// State machine to batch up candle updates.
-#[derive(Default)]
 struct CandleAggregator {
+    /// Remaining candles for current batch.
+    remaining: u8,
+
     /// Current timestamp.
     watermark: Option<DateTime<Utc>>,
 
@@ -54,11 +56,22 @@ struct CandleAggregator {
 }
 
 impl CandleAggregator {
+    fn new() -> fxcm::Result<Self> {
+        let remaining = fxcm::Symbol::N.try_into()?;
+        let (watermark, candles) = Default::default();
+        Ok(Self {
+            remaining,
+            watermark,
+            candles,
+        })
+    }
+
     /// Reads in the current candle and outputs a batch as necessary.
     fn next(&mut self, candle: fxcm::Candle) -> fxcm::Result<Option<CandleSet>> {
         let symbol = candle.symbol;
         if let Some(ref mut watermark) = self.watermark {
-            if candle.ts <= *watermark {
+            self.remaining -= 1;
+            if candle.ts < *watermark || (candle.ts == *watermark && self.remaining > 0) {
                 self.candles[symbol] = Some(candle);
                 return Ok(None);
             }
@@ -67,6 +80,8 @@ impl CandleAggregator {
                 .values()
                 .map(|x| x.clone().ok_or(fxcm::Error::Initialization))
                 .collect();
+            self.remaining = fxcm::Symbol::N.try_into()?;
+            self.remaining -= u8::from(candle.ts == *watermark);
             *watermark = candle.ts;
             self.candles[symbol] = Some(candle);
             return Ok(Some(CandleSet::from_array(ret?.into_inner()?)));
@@ -78,7 +93,7 @@ impl CandleAggregator {
                 .max()
                 .ok_or(fxcm::Error::Initialization)?;
             self.watermark = Some(watermark);
-        }
+        };
         self.candles[symbol] = Some(candle);
         Ok(None)
     }
@@ -217,7 +232,7 @@ impl<O: nn::OptimizerConfig, const N: usize, const H: u8> Model<O, N, H> {
     /// Initialize model with number of symbols and number of active markets.
     fn new(cfg: O, o: i8) -> fxcm::Result<Self> {
         let vs = nn::VarStore::new(Device::cuda_if_available());
-        let opt = cfg.build(&vs, 1e-1)?;
+        let opt = cfg.build(&vs, 1e-3)?;
         let cfg = nn::RNNConfig {
             num_layers: 1,
             dropout: 0.0,
@@ -275,7 +290,8 @@ impl<O: nn::OptimizerConfig, const N: usize, const H: u8> Model<O, N, H> {
             )?;
             let advantages = reward - self.critic.forward(&self.hidden.0);
             let value_loss = (&advantages * &advantages).f_mean(Kind::Float)?;
-            let action_loss = (-advantages * action_log_probs).f_mean(Kind::Float)?;
+            let action_loss = (-advantages.detach() * action_log_probs).f_mean(Kind::Float)?;
+            print!("\r{:?} {:?} {:?}", &value_loss, &action_loss, &dist_entropy);
             let loss = value_loss * 0.5 + action_loss - dist_entropy * 0.01;
             self.opt.backward_step_clip(&loss, 0.5);
         }
@@ -324,7 +340,7 @@ impl MrMagoo {
         train: i32,
         seed: i64,
     ) -> fxcm::Result<Self> {
-        let (seq, candles, candle_aggregator) = Default::default();
+        let (seq, candles) = Default::default();
         let markets = Market::new(currency);
         manual_seed(seed);
         let model = Model::new(Default::default(), markets.len().try_into()?)?;
@@ -332,7 +348,7 @@ impl MrMagoo {
             seq,
             currency,
             markets,
-            candle_aggregator,
+            candle_aggregator: CandleAggregator::new()?,
             candles,
             qty,
             train,

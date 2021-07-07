@@ -149,9 +149,7 @@ impl<E: Exchange> Iterator for Hybrid<E> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.train == 0 {
-            if let Some(event) = self.sim.next() {
-                Some(event)
-            } else if self.live != 0 {
+            if self.live != 0 {
                 let ret = self.exchange.next();
                 if let Some(Ok(fxcm::Event::Candle(_))) = ret {
                     self.live -= i32::from(self.live > 0);
@@ -160,23 +158,21 @@ impl<E: Exchange> Iterator for Hybrid<E> {
             } else {
                 None
             }
-        } else if self.sim.needs_candle() {
-            if let Some(event) = self.exchange.next() {
-                match event {
-                    Ok(x) => match x {
-                        fxcm::Event::Candle(candle) => {
-                            if self.train > 0 {
-                                self.train -= 1;
-                            }
-                            self.sim.set_candle(candle);
-                            self.sim.next()
+        } else if !self.sim.needs_candle() {
+            self.sim.next()
+        } else if let Some(event) = self.exchange.next() {
+            match event {
+                Ok(x) => match x {
+                    fxcm::Event::Candle(candle) => {
+                        if self.train > 0 {
+                            self.train -= 1;
                         }
-                        fxcm::Event::Order(order) => Some(Err(fxcm::Error::Order(order))),
-                    },
-                    Err(x) => Some(Err(x)),
-                }
-            } else {
-                self.sim.next()
+                        self.sim.set_candle(candle);
+                        self.sim.next()
+                    }
+                    fxcm::Event::Order(order) => Some(Err(fxcm::Error::Order(order))),
+                },
+                Err(x) => Some(Err(x)),
             }
         } else {
             self.sim.next()
@@ -223,6 +219,7 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Sim<S> {
         })
     }
 
+    /// Execute the order assuming no slippage.
     fn trade(&mut self, mut order: fxcm::Order) -> Option<FallibleEvent> {
         let ret = if let Some(ref mut market) = self.markets[order.symbol] {
             market.trade(&mut order);
@@ -233,10 +230,12 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Sim<S> {
         Some(ret)
     }
 
+    /// Whether the simulator has a current candle.
     fn needs_candle(&self) -> bool {
         self.candle.is_none()
     }
 
+    /// Set the current candle from an external data source.
     fn set_candle(&mut self, candle: fxcm::Candle) {
         self.ts = Some(candle.ts);
         self.candle = Some(candle.clone());
