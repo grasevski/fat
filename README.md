@@ -41,4 +41,4 @@ gunzip <candles.csv.gz |head -1000000 |RUST_BACKTRACE=full ./target/debug/fat -t
 lldb target/debug/fat
 ```
 
-Configuration of the trader (hyperparams etc) is mostly done by editing the source code in `src/trader.rs` but this could be potentially configured by a file or command line arguments in the future.
+Configuration of the trader (hyperparams etc) is done via command line flags as well as editing `src/cfg.rs` and recompiling.
