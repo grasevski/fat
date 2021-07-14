@@ -219,7 +219,7 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Sim<S> {
         })
     }
 
-    /// Execute the order assuming no slippage.
+    /// Executes the order assuming no slippage.
     fn trade(&mut self, mut order: fxcm::Order) -> Option<FallibleEvent> {
         let ret = if let Some(ref mut market) = self.markets[order.symbol] {
             market.trade(&mut order);
@@ -230,12 +230,12 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Sim<S> {
         Some(ret)
     }
 
-    /// Whether the simulator has a current candle.
+    /// Returns Whether the simulator has a current candle.
     fn needs_candle(&self) -> bool {
         self.candle.is_none()
     }
 
-    /// Set the current candle from an external data source.
+    /// Sets the current candle from an external data source.
     fn set_candle(&mut self, candle: fxcm::Candle) {
         self.ts = Some(candle.ts);
         self.candle = Some(candle.clone());

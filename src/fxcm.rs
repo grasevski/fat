@@ -1,14 +1,191 @@
 //! FXCM data model.
-use arrayvec::ArrayVec;
+use super::cfg;
+use arrayvec::{ArrayVec, CapacityError};
+use bitvec::BitArr;
 use chrono::{DateTime, NaiveDateTime, ParseError, Utc};
-use enum_map::Enum;
+use enum_map::{Enum, EnumMap};
 use num_derive::FromPrimitive;
 use proptest_derive::Arbitrary;
-use rust_decimal::prelude::{Decimal, One, ToPrimitive};
+use rust_decimal::prelude::{Decimal, One};
 use serde::{Deserialize, Serialize};
-use std::{cmp, fmt, io, num, result};
+use std::{cmp, convert::TryFrom, fmt, io, mem, num, result};
 use strum_macros::{Display, EnumString};
 use tch::TchError;
+
+/// Profit and loss for each market.
+pub type Reward = ArrayVec<f32, { Order::MAX }>;
+
+/// Hidden state vector.
+pub type Hidden = [f32; cfg::LAYERS * cfg::FEATURES];
+
+/// State vector representation.
+type StateVec = BitArr!(for Order::MAX, in u8);
+
+/// Trader position representation.
+#[derive(Clone, Copy, Default)]
+pub struct State(StateVec);
+
+impl State {
+    /// Converts the slice into a compact state.
+    pub fn from_slice(xs: &[bool]) -> Self {
+        let mut data = StateVec::zeroed();
+        for (mut d, x) in data.iter_mut().zip(xs) {
+            *d = *x;
+        }
+        Self(data)
+    }
+
+    /// Converts the state into a tensor format.
+    fn into_iter_f32(self, n: usize) -> impl Iterator<Item = f32> {
+        self.into_iter(n).map(u16::from).map(f32::from)
+    }
+
+    /// Converts the state into a bool iterator.
+    fn into_iter(self, n: usize) -> impl Iterator<Item = bool> {
+        self.0.into_iter().take(n)
+    }
+}
+
+/// All bid and ask prices for a given time slice.
+pub type ObservationSet = EnumMap<Symbol, Observation>;
+
+/// Market data for one symbol for one timestep.
+#[derive(Default)]
+pub struct Observation {
+    /// Highest bid.
+    bid: f32,
+
+    /// Lowest ask.
+    ask: f32,
+}
+
+impl TryFrom<&Candle> for Observation {
+    type Error = self::Error;
+
+    fn try_from(candle: &Candle) -> self::Result<Self> {
+        let (bid, ask) = (f32::try_from(candle.bid)?, f32::try_from(candle.ask)?);
+        Ok(Self { bid, ask })
+    }
+}
+
+impl Observation {
+    /// Returns an iterator for the data in this observation.
+    fn iter(&self) -> impl Iterator<Item = f32> {
+        ArrayVec::from([self.bid, self.ask]).into_iter()
+    }
+}
+
+/// The input part of the state.
+#[derive(Default)]
+pub struct PartialTimestep {
+    /// Trader state.
+    state: State,
+
+    /// Hidden state leading into this step.
+    hidden: Hidden,
+
+    /// The preceding sequence of observations.
+    observation: ArrayVec<ObservationSet, { cfg::SEQ_LEN }>,
+}
+
+impl PartialTimestep {
+    /// Adds another observation to the sequence.
+    pub fn update(&mut self, observation: ObservationSet) -> self::Result<()> {
+        self.observation.try_push(observation)?;
+        Ok(())
+    }
+
+    /// Determines whether we are ready for action.
+    pub fn ready(&self) -> bool {
+        self.observation.is_full()
+    }
+
+    /// Outputs timestep info and updates state machine.
+    pub fn act(&mut self, action: State, mut hidden: Hidden, stateful: bool) -> Timestep {
+        if !stateful {
+            hidden = self.hidden.clone();
+        }
+        let mut timestep = Self {
+            state: action,
+            hidden,
+            observation: Default::default(),
+        };
+        mem::swap(self, &mut timestep);
+        Timestep { action, timestep }
+    }
+
+    /// Returns an iterator over the state data.
+    pub fn get_state(&self, actions: usize) -> impl Iterator<Item = f32> {
+        self.state.into_iter_f32(actions)
+    }
+
+    /// Returns an iterator over the hidden data.
+    pub fn get_hidden(&self) -> impl Iterator<Item = f32> {
+        ArrayVec::from(self.hidden).into_iter()
+    }
+
+    /// Returns an iterator over the observation data.
+    pub fn get_observation(&self) -> impl Iterator<Item = f32> {
+        let ret: ArrayVec<_, { cfg::SEQ_LEN * 2 * Symbol::N }> = self
+            .observation
+            .iter()
+            .flat_map(|x| x.values().flat_map(Observation::iter))
+            .collect();
+        ret.into_iter()
+    }
+}
+
+/// The action plus the input part of the state.
+pub struct Timestep {
+    /// Action taken by the trader.
+    action: State,
+
+    /// Other fields.
+    timestep: PartialTimestep,
+}
+
+impl Timestep {
+    /// Returns an iterator of booleans over the actions taken.
+    pub fn action_bool(&self, actions: usize) -> impl Iterator<Item = bool> {
+        self.action.into_iter(actions)
+    }
+
+    /// Returns an iterator over the actions taken.
+    pub fn get_action(&self, actions: usize) -> impl Iterator<Item = f32> {
+        self.action.into_iter_f32(actions)
+    }
+
+    /// Accesses the other timestep information.
+    pub fn get_timestep(&self) -> &PartialTimestep {
+        &self.timestep
+    }
+}
+
+/// A completed historical record.
+pub struct CompleteTimestep {
+    /// Profit and loss from this step.
+    reward: Reward,
+
+    /// State data.
+    timestep: Timestep,
+}
+
+impl CompleteTimestep {
+    /// Constructs the completed historical record.
+    pub fn new(reward: Reward, timestep: Timestep) -> Self {
+        Self { reward, timestep }
+    }
+
+    /// Returns an iterator over the reward data.
+    pub fn get_reward(&self) -> impl Iterator<Item = f32> {
+        self.reward.clone().into_iter()
+    }
+
+    /// Accesses the other timestep information.
+    pub fn get_timestep(&self) -> &Timestep {
+        &self.timestep
+    }
+}
 
 /// Candle iterators may fail and return an error instead.
 pub type FallibleCandle = self::Result<Candle>;
@@ -58,15 +235,6 @@ impl Candle {
             bid: historical.bid_open,
             ask: historical.ask_open,
         })
-    }
-
-    /// Converts to a convenient format for machine learning.
-    pub fn state(&self) -> impl Iterator<Item = self::Result<f32>> {
-        [self.bid, self.ask]
-            .iter()
-            .map(|x| Ok(x.to_f64().ok_or(Error::F64(*x))? as f32))
-            .collect::<ArrayVec<self::Result<f32>, 2>>()
-            .into_iter()
     }
 }
 
@@ -141,17 +309,20 @@ pub type Result<T> = result::Result<T, self::Error>;
 /// All possible errors returned by this library.
 #[derive(Debug)]
 pub enum Error {
-    /// Invalid action arrayvec size.
-    ArrayVec(ArrayVec<f32, { Order::MAX }>),
-
     /// Autotrader has fallen too far behind.
     CandleSet,
 
     /// Invalid candle arrayvec size.
     CandleVec,
 
+    /// History buffer overflow.
+    CompleteTimestep,
+
     /// Parsing csv failed.
     Csv(csv::Error),
+
+    /// Decimal conversion failed.
+    Decimal(rust_decimal::Error),
 
     /// Formatting a URL failed.
     Fmt(fmt::Error),
@@ -164,6 +335,9 @@ pub enum Error {
 
     /// Error reading or writing to the exchange or data source.
     Io(io::Error),
+
+    /// Observation buffer overflow.
+    ObservationSet(CapacityError<ObservationSet>),
 
     /// Too many orders sent to the exchange.
     Order(Order),
@@ -179,12 +353,9 @@ pub enum Error {
 
     /// Integer type conversion failed.
     TryFromInt(num::TryFromIntError),
-}
 
-impl From<ArrayVec<f32, { Order::MAX }>> for Error {
-    fn from(error: ArrayVec<f32, { Order::MAX }>) -> Self {
-        Self::ArrayVec(error)
-    }
+    /// State type conversion failed.
+    Vec(Vec<f32>),
 }
 
 impl From<ArrayVec<Candle, { Symbol::N }>> for Error {
@@ -193,9 +364,27 @@ impl From<ArrayVec<Candle, { Symbol::N }>> for Error {
     }
 }
 
+impl From<CapacityError<CompleteTimestep>> for Error {
+    fn from(_: CapacityError<CompleteTimestep>) -> Self {
+        Self::CompleteTimestep
+    }
+}
+
+impl From<CapacityError<ObservationSet>> for Error {
+    fn from(error: CapacityError<ObservationSet>) -> Self {
+        Self::ObservationSet(error)
+    }
+}
+
 impl From<csv::Error> for Error {
     fn from(error: csv::Error) -> Self {
         Self::Csv(error)
+    }
+}
+
+impl From<rust_decimal::Error> for Error {
+    fn from(error: rust_decimal::Error) -> Self {
+        Self::Decimal(error)
     }
 }
 
@@ -238,6 +427,12 @@ impl From<TchError> for Error {
 impl From<num::TryFromIntError> for Error {
     fn from(error: num::TryFromIntError) -> Self {
         Self::TryFromInt(error)
+    }
+}
+
+impl From<Vec<f32>> for Error {
+    fn from(error: Vec<f32>) -> Self {
+        Self::Vec(error)
     }
 }
 
@@ -315,7 +510,7 @@ pub enum Symbol {
 
 impl Symbol {
     /// Total number of symbols.
-    pub const N: usize = 21;
+    pub const N: usize = mem::size_of::<EnumMap<Symbol, u8>>();
 
     /// Returns whether the given currency is related to this symbol.
     pub fn has_currency(self, currency: Currency) -> bool {

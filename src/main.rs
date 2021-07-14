@@ -5,14 +5,21 @@
 use chrono::NaiveDate;
 use clap::Clap;
 use csv::Reader;
+use mimalloc::MiMalloc;
 use reqwest::blocking::Client;
 use rust_decimal::prelude::Decimal;
 use std::{env, io};
 
+mod cfg;
 mod exchange;
 mod fxcm;
 mod history;
+mod model;
 mod trader;
+
+/// A fast cross platform allocator.
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 /// FXCM autotrader and backtester.
 #[derive(Clap)]
@@ -64,6 +71,14 @@ struct Opts {
     /// Random number generator seed.
     #[clap(short, long, default_value = "0")]
     gen: i64,
+
+    /// Dropout rate.
+    #[clap(short, long, default_value = "0")]
+    prob: f64,
+
+    /// Learning rate.
+    #[clap(short, long, default_value = "1e-3")]
+    alpha: f64,
 }
 
 /// Connects trader to exchange and runs to completion.
@@ -114,7 +129,15 @@ fn main() -> fxcm::Result<()> {
         exchange = _logging.as_mut().expect("logging exchange not initialized");
     }
     let mut dryrun = trader::Dryrun::default();
-    let mut mrmagoo = trader::MrMagoo::new(opts.currency, opts.qty, opts.train, opts.gen)?;
+    let mut mrmagoo = trader::MrMagoo::new(
+        opts.currency,
+        opts.qty,
+        opts.train,
+        opts.gen,
+        opts.prob,
+        opts.alpha,
+        true,
+    )?;
     let trader: &mut dyn trader::Trader = if opts.noop { &mut dryrun } else { &mut mrmagoo };
     println!("{}", run(exchange, trader)?);
     Ok(())
