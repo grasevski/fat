@@ -103,7 +103,7 @@ impl PartialTimestep {
     /// Outputs timestep info and updates state machine.
     pub fn act(&mut self, action: State, mut hidden: Hidden, stateful: bool) -> Timestep {
         if !stateful {
-            hidden = self.hidden.clone();
+            hidden = self.hidden;
         }
         let mut timestep = Self {
             state: action,
