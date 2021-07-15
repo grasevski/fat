@@ -203,7 +203,7 @@ impl Model {
         let hidden = {
             let arr: ArrayVec<_, { BATCH * cfg::LAYERS * cfg::FEATURES }> =
                 timestep.get_hidden().collect();
-            nn::GRUState(self.to_gpu(arr.as_slice(), &size)?)
+            nn::GRUState(self.to_gpu(arr.as_slice(), &size)?.f_transpose(0, 1)?)
         };
         let (observation, nn::GRUState(hidden)) = self.rnn.seq_init(&observation, &hidden);
         let observation = observation.f_flatten(1, -1)?;

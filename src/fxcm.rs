@@ -15,8 +15,32 @@ use tch::TchError;
 /// Profit and loss for each market.
 pub type Reward = ArrayVec<f32, { Order::MAX }>;
 
+/// Hidden state size.
+const HIDDEN: usize = cfg::LAYERS * cfg::FEATURES;
+
 /// Hidden state vector.
-pub type Hidden = [f32; cfg::LAYERS * cfg::FEATURES];
+#[derive(Clone)]
+pub struct Hidden([f32; HIDDEN]);
+
+impl Default for Hidden {
+    fn default() -> Self {
+        Self([Default::default(); HIDDEN])
+    }
+}
+
+impl TryFrom<Vec<f32>> for Hidden {
+    type Error = self::Error;
+
+    fn try_from(hidden: Vec<f32>) -> self::Result<Self> {
+        Ok(Self(TryFrom::try_from(hidden)?))
+    }
+}
+
+impl From<&Hidden> for ArrayVec<f32, HIDDEN> {
+    fn from(hidden: &Hidden) -> Self {
+        From::from(hidden.0)
+    }
+}
 
 /// State vector representation.
 type StateVec = BitArr!(for Order::MAX, in u8);
@@ -103,7 +127,7 @@ impl PartialTimestep {
     /// Outputs timestep info and updates state machine.
     pub fn act(&mut self, action: State, mut hidden: Hidden, stateful: bool) -> Timestep {
         if !stateful {
-            hidden = self.hidden;
+            hidden = self.hidden.clone();
         }
         let mut timestep = Self {
             state: action,
@@ -121,7 +145,7 @@ impl PartialTimestep {
 
     /// Returns an iterator over the hidden data.
     pub fn get_hidden(&self) -> impl Iterator<Item = f32> {
-        ArrayVec::from(self.hidden).into_iter()
+        ArrayVec::from(&self.hidden).into_iter()
     }
 
     /// Returns an iterator over the observation data.
