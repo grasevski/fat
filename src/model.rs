@@ -147,6 +147,7 @@ impl Model {
         let advantages = reward - critic;
         let value_loss = (&advantages * &advantages).mean(Kind::Float);
         let action_loss = (-advantages.detach() * action_log_probs).mean(Kind::Float);
+        println!("{:?} {:?} {:?}", value_loss, action_loss, dist_entropy);
         let loss = value_loss * 0.5 + action_loss - dist_entropy * 0.01;
         self.opt.backward_step_clip(&loss, 0.5);
         Ok(())

@@ -5,7 +5,7 @@ use static_assertions::const_assert;
 pub const LAYERS: usize = 1;
 
 /// Number of hidden units in the GRU.
-pub const FEATURES: usize = 64;
+pub const FEATURES: usize = 128;
 
 /// Number of consecutive observations.
 pub const SEQ_LEN: usize = 120;
