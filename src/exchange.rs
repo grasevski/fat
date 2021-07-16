@@ -285,7 +285,7 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Iterator for Sim<S> {
                 }
             }
         }
-        if let Some(candle) = self.candle.clone() {
+        if let Some(candle) = self.candle.take() {
             if let Some(order) = self.orders.peek() {
                 if order.ts < candle.ts {
                     return if let Some(order) = self.orders.dequeue() {
@@ -295,7 +295,6 @@ impl<S: Iterator<Item = fxcm::FallibleCandle>> Iterator for Sim<S> {
                     };
                 }
             }
-            self.candle = None;
             Some(Ok(fxcm::Event::Candle(candle)))
         } else if let Some(order) = self.orders.dequeue() {
             self.trade(order)

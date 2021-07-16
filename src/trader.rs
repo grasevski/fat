@@ -272,7 +272,7 @@ impl Trader for MrMagoo {
             }
             self.candles = Some(curr);
         }
-        if let Some(candles) = self.candles.clone() {
+        if let Some(candles) = self.candles.take() {
             if !self.markets.iter().all(Market::ready) {
                 return Ok(Default::default());
             }
@@ -309,7 +309,6 @@ impl Trader for MrMagoo {
                 .collect();
             self.timestep = Some(timestep);
             self.seq += self.markets.len();
-            self.candles = None;
             Ok(ret)
         } else {
             Ok(Default::default())
