@@ -1,5 +1,5 @@
 #!/bin/bash -eux
-gridsearch () {
+tune () {
 	cat >src/cfg.rs <<EOF
 pub const LAYERS: usize = $1;
 pub const FEATURES: usize = $2;
@@ -29,9 +29,9 @@ for layers in 1 2 4 8; do
 		for seq_len in 1 2 4 8; do
 			for steps in 1 2 4 8; do
 				for has_biases in false true; do
-					gridsearch $layers $features $seq_len $steps false $has_biases false
-					gridsearch $layers $features $seq_len $steps false $has_biases true
-					gridsearch $layers $features $seq_len $steps true $has_biases false
+					tune $layers $features $seq_len $steps false $has_biases false
+					tune $layers $features $seq_len $steps false $has_biases true
+					tune $layers $features $seq_len $steps true $has_biases false
 					wait
 				done
 			done
