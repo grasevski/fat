@@ -18,8 +18,11 @@ const_assert!(!cfg::STATEFUL || !cfg::BIDIRECTIONAL);
 /// Profit and loss for each market.
 pub type Reward = ArrayVec<f32, { Order::MAX }>;
 
+/// Dimension for the hidden variables.
+pub const LAYER_DIM: usize = cfg::LAYERS * if cfg::BIDIRECTIONAL { 2 } else { 1 };
+
 /// Hidden state size.
-const HIDDEN: usize = cfg::LAYERS * cfg::FEATURES;
+const HIDDEN: usize = LAYER_DIM * cfg::FEATURES;
 
 /// Hidden state vector.
 #[derive(Clone)]

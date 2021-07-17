@@ -31,9 +31,6 @@ pub struct Model {
 }
 
 impl Model {
-    /// Dimension for the hidden variables.
-    const LAYER_DIM: usize = cfg::LAYERS * if cfg::BIDIRECTIONAL { 2 } else { 1 };
-
     /// Initializes the neural network.
     pub fn new(seed: i64, output: u8, dropout: f64, learning_rate: f64) -> fxcm::Result<Self> {
         let rng = StdRng::seed_from_u64(seed.try_into()?);
@@ -67,10 +64,11 @@ impl Model {
 
     /// Constructs a prediction head.
     fn predictor(path: nn::Path, output: u8) -> fxcm::Result<nn::Linear> {
-        let mut input = cfg::SEQ_LEN * cfg::FEATURES + usize::from(output);
+        let mut input = cfg::SEQ_LEN * cfg::FEATURES;
         if cfg::BIDIRECTIONAL {
             input <<= 1;
         }
+        input += usize::from(output);
         Ok(nn::linear(
             path,
             input.try_into()?,
@@ -110,11 +108,11 @@ impl Model {
         };
         let size = [
             history.len().try_into()?,
-            Self::LAYER_DIM.try_into()?,
+            fxcm::LAYER_DIM.try_into()?,
             cfg::FEATURES.try_into()?,
         ];
         let mut hidden = {
-            let arr: ArrayVec<_, { cfg::BATCHSIZE * Self::LAYER_DIM * cfg::FEATURES }> = history
+            let arr: ArrayVec<_, { cfg::BATCHSIZE * fxcm::LAYER_DIM * cfg::FEATURES }> = history
                 .iter()
                 .flat_map(|x| x.get_timestep().get_timestep().get_hidden())
                 .collect();
@@ -204,11 +202,11 @@ impl Model {
         };
         let size = [
             BATCH.try_into()?,
-            Self::LAYER_DIM.try_into()?,
+            fxcm::LAYER_DIM.try_into()?,
             cfg::FEATURES.try_into()?,
         ];
         let hidden = {
-            let arr: ArrayVec<_, { BATCH * Self::LAYER_DIM * cfg::FEATURES }> =
+            let arr: ArrayVec<_, { BATCH * fxcm::LAYER_DIM * cfg::FEATURES }> =
                 timestep.get_hidden().collect();
             nn::GRUState(self.to_gpu(arr.as_slice(), &size)?.f_transpose(0, 1)?)
         };
