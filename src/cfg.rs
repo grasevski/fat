@@ -1,5 +1,4 @@
 //! Configuration hyperparameters.
-use static_assertions::const_assert;
 
 /// Number of stacked GRU layers.
 pub const LAYERS: usize = 1;
@@ -16,4 +15,11 @@ pub const STEPS: usize = 1;
 /// Mini batch size.
 pub const BATCHSIZE: usize = STEPS;
 
-const_assert!(STEPS % BATCHSIZE == 0);
+/// Whether to carry observation between actions.
+pub const STATEFUL: bool = true;
+
+/// Include bias in GRU.
+pub const HAS_BIASES: bool = true;
+
+/// Whether GRU is bidirectional.
+pub const BIDIRECTIONAL: bool = false;

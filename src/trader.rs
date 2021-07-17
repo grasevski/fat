@@ -200,9 +200,6 @@ pub struct MrMagoo {
     /// Training iterations remaining.
     train: i32,
 
-    /// Whether to carry observation state between actions.
-    stateful: bool,
-
     /// PPO agent.
     model: model::Model,
 
@@ -236,7 +233,6 @@ impl MrMagoo {
         seed: i64,
         dropout: f64,
         learning_rate: f64,
-        stateful: bool,
     ) -> fxcm::Result<Self> {
         let (seq, candles, partial, timestep, history) = Default::default();
         let markets = Market::new(currency);
@@ -246,7 +242,6 @@ impl MrMagoo {
             currency,
             qty,
             train,
-            stateful,
             model,
             markets,
             candle_aggregator: CandleAggregator::new()?,
@@ -301,7 +296,7 @@ impl Trader for MrMagoo {
                     self.history.clear();
                 }
             }
-            let timestep = self.model.act(&mut self.partial, n, self.stateful)?;
+            let timestep = self.model.act(&mut self.partial, n)?;
             let (currency, qty) = (self.currency, self.qty);
             let ret = (self.seq..)
                 .zip(timestep.action_bool(n.into()).zip(&mut self.markets))

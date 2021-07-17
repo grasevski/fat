@@ -8,9 +8,12 @@ use num_derive::FromPrimitive;
 use proptest_derive::Arbitrary;
 use rust_decimal::prelude::{Decimal, One};
 use serde::{Deserialize, Serialize};
+use static_assertions::const_assert;
 use std::{cmp, convert::TryFrom, fmt, io, mem, num, result};
 use strum_macros::{Display, EnumString};
 use tch::TchError;
+
+const_assert!(!cfg::STATEFUL || !cfg::BIDIRECTIONAL);
 
 /// Profit and loss for each market.
 pub type Reward = ArrayVec<f32, { Order::MAX }>;
@@ -125,8 +128,8 @@ impl PartialTimestep {
     }
 
     /// Outputs timestep info and updates state machine.
-    pub fn act(&mut self, action: State, mut hidden: Hidden, stateful: bool) -> Timestep {
-        if !stateful {
+    pub fn act(&mut self, action: State, mut hidden: Hidden) -> Timestep {
+        if !cfg::STATEFUL {
             hidden = self.hidden.clone();
         }
         let mut timestep = Self {

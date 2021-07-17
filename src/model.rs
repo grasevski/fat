@@ -31,6 +31,9 @@ pub struct Model {
 }
 
 impl Model {
+    /// Dimension for the hidden variables.
+    const LAYER_DIM: usize = cfg::LAYERS * if cfg::BIDIRECTIONAL { 2 } else { 1 };
+
     /// Initializes the neural network.
     pub fn new(seed: i64, output: u8, dropout: f64, learning_rate: f64) -> fxcm::Result<Self> {
         let rng = StdRng::seed_from_u64(seed.try_into()?);
@@ -38,8 +41,10 @@ impl Model {
         let vs = nn::VarStore::new(Device::cuda_if_available());
         let opt = nn::RmsProp::default().build(&vs, learning_rate)?;
         let cfg = nn::RNNConfig {
+            has_biases: cfg::HAS_BIASES,
             num_layers: cfg::LAYERS.try_into()?,
             dropout,
+            bidirectional: cfg::BIDIRECTIONAL,
             ..Default::default()
         };
         let rnn = nn::gru(
@@ -62,7 +67,10 @@ impl Model {
 
     /// Constructs a prediction head.
     fn predictor(path: nn::Path, output: u8) -> fxcm::Result<nn::Linear> {
-        let input = cfg::SEQ_LEN * cfg::FEATURES + usize::from(output);
+        let mut input = cfg::SEQ_LEN * cfg::FEATURES + usize::from(output);
+        if cfg::BIDIRECTIONAL {
+            input <<= 1;
+        }
         Ok(nn::linear(
             path,
             input.try_into()?,
@@ -102,11 +110,11 @@ impl Model {
         };
         let size = [
             history.len().try_into()?,
-            cfg::LAYERS.try_into()?,
+            Self::LAYER_DIM.try_into()?,
             cfg::FEATURES.try_into()?,
         ];
         let mut hidden = {
-            let arr: ArrayVec<_, { cfg::BATCHSIZE * cfg::LAYERS * cfg::FEATURES }> = history
+            let arr: ArrayVec<_, { cfg::BATCHSIZE * Self::LAYER_DIM * cfg::FEATURES }> = history
                 .iter()
                 .flat_map(|x| x.get_timestep().get_timestep().get_hidden())
                 .collect();
@@ -147,7 +155,6 @@ impl Model {
         let advantages = reward - critic;
         let value_loss = (&advantages * &advantages).mean(Kind::Float);
         let action_loss = (-advantages.detach() * action_log_probs).mean(Kind::Float);
-        println!("{:?} {:?} {:?}", value_loss, action_loss, dist_entropy);
         let loss = value_loss * 0.5 + action_loss - dist_entropy * 0.01;
         self.opt.backward_step_clip(&loss, 0.5);
         Ok(())
@@ -173,10 +180,9 @@ impl Model {
         &self,
         timestep: &mut fxcm::PartialTimestep,
         actions: u8,
-        stateful: bool,
     ) -> fxcm::Result<fxcm::Timestep> {
         let (action, hidden) = no_grad(|| self.choose(&*timestep, actions))?;
-        Ok(timestep.act(action, hidden, stateful))
+        Ok(timestep.act(action, hidden))
     }
 
     /// Chooses the actions based on the current actor network inference.
@@ -198,11 +204,11 @@ impl Model {
         };
         let size = [
             BATCH.try_into()?,
-            cfg::LAYERS.try_into()?,
+            Self::LAYER_DIM.try_into()?,
             cfg::FEATURES.try_into()?,
         ];
         let hidden = {
-            let arr: ArrayVec<_, { BATCH * cfg::LAYERS * cfg::FEATURES }> =
+            let arr: ArrayVec<_, { BATCH * Self::LAYER_DIM * cfg::FEATURES }> =
                 timestep.get_hidden().collect();
             nn::GRUState(self.to_gpu(arr.as_slice(), &size)?.f_transpose(0, 1)?)
         };

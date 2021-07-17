@@ -136,7 +136,6 @@ fn main() -> fxcm::Result<()> {
         opts.gen,
         opts.prob,
         opts.alpha,
-        true,
     )?;
     let trader: &mut dyn trader::Trader = if opts.noop { &mut dryrun } else { &mut mrmagoo };
     println!("{}", run(exchange, trader)?);
