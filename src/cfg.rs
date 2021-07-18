@@ -12,14 +12,8 @@ pub const SEQ_LEN: usize = 120;
 /// Length of an episode for reinforcement learning.
 pub const STEPS: usize = 1;
 
-/// Mini batch size.
-pub const BATCHSIZE: usize = STEPS;
-
 /// Whether to carry observation between actions.
 pub const STATEFUL: bool = true;
-
-/// Include bias in GRU.
-pub const HAS_BIASES: bool = true;
 
 /// Whether GRU is bidirectional.
 pub const BIDIRECTIONAL: bool = false;

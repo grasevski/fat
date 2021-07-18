@@ -233,10 +233,12 @@ impl MrMagoo {
         seed: i64,
         dropout: f64,
         learning_rate: f64,
+        has_biases: bool,
     ) -> fxcm::Result<Self> {
         let (seq, candles, partial, timestep, history) = Default::default();
         let markets = Market::new(currency);
-        let model = model::Model::new(seed, markets.len().try_into()?, dropout, learning_rate)?;
+        let n = markets.len().try_into()?;
+        let model = model::Model::new(seed, n, dropout, learning_rate, has_biases)?;
         Ok(Self {
             seq,
             currency,

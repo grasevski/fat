@@ -13,6 +13,10 @@ use std::{cmp, convert::TryFrom, fmt, io, mem, num, result};
 use strum_macros::{Display, EnumString};
 use tch::TchError;
 
+const_assert!(cfg::LAYERS != 0);
+const_assert!(cfg::FEATURES != 0);
+const_assert!(cfg::SEQ_LEN != 0);
+const_assert!(cfg::STEPS != 0);
 const_assert!(!cfg::STATEFUL || !cfg::BIDIRECTIONAL);
 
 /// Profit and loss for each market.
@@ -22,7 +26,11 @@ pub type Reward = ArrayVec<f32, { Order::MAX }>;
 pub const LAYER_DIM: usize = cfg::LAYERS * if cfg::BIDIRECTIONAL { 2 } else { 1 };
 
 /// Hidden state size.
-const HIDDEN: usize = LAYER_DIM * cfg::FEATURES;
+const HIDDEN: usize = if cfg::STATEFUL {
+    LAYER_DIM * cfg::FEATURES
+} else {
+    0
+};
 
 /// Hidden state vector.
 #[derive(Clone)]
@@ -467,7 +475,7 @@ impl From<Vec<f32>> for Error {
 }
 
 /// All available currencies.
-#[derive(Clone, Copy, Debug, Deserialize, EnumString, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Display, Enum, EnumString, PartialEq, Serialize)]
 #[serde(rename_all = "UPPERCASE")]
 #[strum(serialize_all = "UPPERCASE")]
 pub enum Currency {
@@ -502,8 +510,8 @@ pub enum Currency {
     Clone,
     Copy,
     Debug,
-    Display,
     Deserialize,
+    Display,
     Enum,
     Eq,
     FromPrimitive,

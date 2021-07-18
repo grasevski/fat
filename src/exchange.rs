@@ -33,7 +33,7 @@ pub struct Real {
 
 impl Real {
     /// Initializes connection to FXCM.
-    pub fn new(_stage: bool, _token: String) -> fxcm::Result<Self> {
+    pub fn new(_yolo: bool) -> fxcm::Result<Self> {
         // TODO
         Ok(Self {})
     }

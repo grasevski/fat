@@ -31,14 +31,23 @@ pub struct Model {
 }
 
 impl Model {
+    /// Mini batch size.
+    const BATCHSIZE: usize = cfg::STEPS;
+
     /// Initializes the neural network.
-    pub fn new(seed: i64, output: u8, dropout: f64, learning_rate: f64) -> fxcm::Result<Self> {
+    pub fn new(
+        seed: i64,
+        output: u8,
+        dropout: f64,
+        learning_rate: f64,
+        has_biases: bool,
+    ) -> fxcm::Result<Self> {
         let rng = StdRng::seed_from_u64(seed.try_into()?);
         manual_seed(seed);
         let vs = nn::VarStore::new(Device::cuda_if_available());
         let opt = nn::RmsProp::default().build(&vs, learning_rate)?;
         let cfg = nn::RNNConfig {
-            has_biases: cfg::HAS_BIASES,
+            has_biases,
             num_layers: cfg::LAYERS.try_into()?,
             dropout,
             bidirectional: cfg::BIDIRECTIONAL,
@@ -86,21 +95,21 @@ impl Model {
     fn train(&mut self, history: &[fxcm::CompleteTimestep], actions: u8) -> fxcm::Result<()> {
         let size = [history.len().try_into()?, actions.into()];
         let state = {
-            let arr: ArrayVec<_, { cfg::BATCHSIZE * fxcm::Order::MAX }> = history
+            let arr: ArrayVec<_, { Self::BATCHSIZE * fxcm::Order::MAX }> = history
                 .iter()
                 .flat_map(|x| x.get_timestep().get_timestep().get_state(actions.into()))
                 .collect();
             self.to_gpu(arr.as_slice(), &size)?
         };
         let action = {
-            let arr: ArrayVec<_, { cfg::BATCHSIZE * fxcm::Order::MAX }> = history
+            let arr: ArrayVec<_, { Self::BATCHSIZE * fxcm::Order::MAX }> = history
                 .iter()
                 .flat_map(|x| x.get_timestep().get_action(actions.into()))
                 .collect();
             self.to_gpu(arr.as_slice(), &size)?
         };
         let reward = {
-            let arr: ArrayVec<_, { cfg::BATCHSIZE * fxcm::Order::MAX }> = history
+            let arr: ArrayVec<_, { Self::BATCHSIZE * fxcm::Order::MAX }> = history
                 .iter()
                 .flat_map(fxcm::CompleteTimestep::get_reward)
                 .collect();
@@ -111,12 +120,14 @@ impl Model {
             fxcm::LAYER_DIM.try_into()?,
             cfg::FEATURES.try_into()?,
         ];
-        let mut hidden = {
-            let arr: ArrayVec<_, { cfg::BATCHSIZE * fxcm::LAYER_DIM * cfg::FEATURES }> = history
+        let mut hidden = if cfg::STATEFUL {
+            let arr: ArrayVec<_, { Self::BATCHSIZE * fxcm::LAYER_DIM * cfg::FEATURES }> = history
                 .iter()
                 .flat_map(|x| x.get_timestep().get_timestep().get_hidden())
                 .collect();
             self.to_gpu(arr.as_slice(), &size)?
+        } else {
+            Tensor::f_zeros(&size, (Kind::Float, self.vs.device()))?
         };
         let n = history.len().try_into()?;
         let size = [
@@ -125,10 +136,11 @@ impl Model {
             2 * i64::try_from(fxcm::Symbol::N)?,
         ];
         let observation = {
-            let arr: ArrayVec<_, { cfg::BATCHSIZE * cfg::SEQ_LEN * 2 * fxcm::Symbol::N }> = history
-                .iter()
-                .flat_map(|x| x.get_timestep().get_timestep().get_observation())
-                .collect();
+            let arr: ArrayVec<_, { Self::BATCHSIZE * cfg::SEQ_LEN * 2 * fxcm::Symbol::N }> =
+                history
+                    .iter()
+                    .flat_map(|x| x.get_timestep().get_timestep().get_observation())
+                    .collect();
             self.to_gpu(arr.as_slice(), &size)?
         };
         let hidden = nn::GRUState(hidden.f_transpose_(0, 1)?);
@@ -166,7 +178,7 @@ impl Model {
     ) -> fxcm::Result<()> {
         for _ in 0..1 {
             history.shuffle(&mut self.rng);
-            for x in history.chunks(cfg::BATCHSIZE) {
+            for x in history.chunks(Self::BATCHSIZE) {
                 self.train(x, actions)?;
             }
         }
@@ -205,11 +217,14 @@ impl Model {
             fxcm::LAYER_DIM.try_into()?,
             cfg::FEATURES.try_into()?,
         ];
-        let hidden = {
+        let hidden = if cfg::STATEFUL {
             let arr: ArrayVec<_, { BATCH * fxcm::LAYER_DIM * cfg::FEATURES }> =
                 timestep.get_hidden().collect();
-            nn::GRUState(self.to_gpu(arr.as_slice(), &size)?.f_transpose(0, 1)?)
+            self.to_gpu(arr.as_slice(), &size)?
+        } else {
+            Tensor::f_zeros(&size, (Kind::Float, self.vs.device()))?
         };
+        let hidden = nn::GRUState(hidden.f_transpose(0, 1)?);
         let (observation, nn::GRUState(hidden)) = self.rnn.seq_init(&observation, &hidden);
         let observation = observation.f_flatten(1, -1)?;
         let size = [BATCH.try_into()?, actions.into()];
@@ -221,9 +236,11 @@ impl Model {
         let state = Tensor::f_cat(&[&observation, &state], 1)?;
         let mut action = self.actor.forward(&state).f_unsqueeze_(0)?;
         let action = Vec::from(action.f_sigmoid_()?.f_bernoulli()?);
-        Ok((
-            fxcm::State::from_slice(&action[..]),
-            Vec::from(hidden).try_into()?,
-        ))
+        let hidden = if cfg::STATEFUL {
+            Vec::from(hidden).try_into()?
+        } else {
+            Default::default()
+        };
+        Ok((fxcm::State::from_slice(&action[..]), hidden))
     }
 }
