@@ -4,6 +4,7 @@ FXCM Autotrader
 Dependencies:
  * Rust
  * Torch bindings (see `tch-rs` project for installation instructions)
+ * Hype for hyperparam tuning
 
 Usage:
 ```sh
@@ -41,13 +42,16 @@ gunzip <candles.csv.gz |head -1000000 |RUST_BACKTRACE=full ./target/debug/fat ru
 lldb target/debug/fat
 
 # List available currencies
-/target/release/fat ls currency
+./target/release/fat ls currency
 
 # List available symbols
-/target/release/fat ls symbol
+./target/release/fat ls symbol
 
 # List available symbols for a given currency
-/target/release/fat ls symbol -c AUD
+./target/release/fat ls symbol -c AUD
+
+# Hyperparam tuning
+(time ./tune.sh) >results.csv 2>tune.log
 ```
 
 Configuration of the trader (hyperparams etc) is done via command line flags as well as editing `src/cfg.rs` and recompiling.

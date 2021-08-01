@@ -1,11 +1,11 @@
 //! Trader interface and implementations.
-use super::{cfg::STEPS, fxcm, model};
+use super::{cfg::ACTIONS, fxcm, model};
 use arrayvec::ArrayVec;
 use chrono::{DateTime, Utc};
+use clap::Clap;
 use enum_map::{Enum, EnumMap};
 use rust_decimal::prelude::{Decimal, One, ToPrimitive};
-use static_assertions::const_assert;
-use std::{convert::TryInto, mem::size_of};
+use std::convert::TryInto;
 
 /// A list of orders from the trader.
 pub type OrderList = ArrayVec<fxcm::Order, { fxcm::Order::MAX }>;
@@ -144,14 +144,15 @@ impl Market {
 
     /// Updates the order status.
     fn update(&mut self, order: &fxcm::Order) {
+        assert!(!self.ready());
         self.qty -= order.qty;
+        assert!(self.ready());
         self.balance.update(order);
     }
 
     /// Calculates the delta in pnl.
-    fn reward(&self, currency: fxcm::Currency, candle: &fxcm::Candle) -> fxcm::Result<f32> {
-        let ret = self.balance.pnl(currency, candle) - self.pnl;
-        Ok(ret.to_f64().ok_or(fxcm::Error::F64(ret))? as f32)
+    fn reward(&self, currency: fxcm::Currency, candle: &fxcm::Candle) -> Decimal {
+        self.balance.pnl(currency, candle) - self.pnl
     }
 
     /// Assigns the next action.
@@ -163,6 +164,7 @@ impl Market {
         qty: Decimal,
         position: bool,
     ) -> Option<fxcm::Order> {
+        assert!(self.ready());
         self.pnl = self.balance.pnl(currency, candle);
         if self.position == position {
             return None;
@@ -197,9 +199,6 @@ pub struct MrMagoo {
     /// Budget for each market.
     qty: Decimal,
 
-    /// Training iterations remaining.
-    train: i32,
-
     /// PPO agent.
     model: model::Model,
 
@@ -219,31 +218,44 @@ pub struct MrMagoo {
     timestep: Option<fxcm::Timestep>,
 
     /// Historical activity.
-    history: ArrayVec<fxcm::CompleteTimestep, { STEPS }>,
+    history: ArrayVec<fxcm::CompleteTimestep, { ACTIONS }>,
 }
 
-const_assert!(size_of::<MrMagoo>() <= (1 << 16));
+/// Runtime autotrader hyperparams.
+#[derive(Clap)]
+pub struct Cfg {
+    /// Number of epochs per update.
+    #[clap(short, long, default_value = "1")]
+    iter: u8,
+
+    /// Random number generator seed.
+    #[clap(short, long, default_value = "0")]
+    gen: i64,
+
+    /// Dropout rate.
+    #[clap(short, long, default_value = "0")]
+    prob: f64,
+
+    /// Learning rate.
+    #[clap(short, long, default_value = "1e-3")]
+    alpha: f64,
+
+    /// Whether to exclude bias parameters from GRU layers.
+    #[clap(short, long)]
+    unbiased: bool,
+}
 
 impl MrMagoo {
     /// Initializes trader with settlement currency and bankroll.
-    pub fn new(
-        currency: fxcm::Currency,
-        qty: Decimal,
-        train: i32,
-        seed: i64,
-        dropout: f64,
-        learning_rate: f64,
-        has_biases: bool,
-    ) -> fxcm::Result<Self> {
+    pub fn new(currency: fxcm::Currency, qty: Decimal, cfg: Cfg) -> fxcm::Result<Self> {
         let (seq, candles, partial, timestep, history) = Default::default();
         let markets = Market::new(currency);
         let n = markets.len().try_into()?;
-        let model = model::Model::new(seed, n, dropout, learning_rate, has_biases)?;
+        let model = model::Model::new(cfg.iter, cfg.gen, n, cfg.prob, cfg.alpha, !cfg.unbiased)?;
         Ok(Self {
             seq,
             currency,
             qty,
-            train,
             model,
             markets,
             candle_aggregator: CandleAggregator::new()?,
@@ -257,12 +269,6 @@ impl MrMagoo {
 
 impl Trader for MrMagoo {
     fn on_candle(&mut self, candle: fxcm::Candle) -> fxcm::Result<OrderList> {
-        if self.train > 0 {
-            self.train -= 1;
-            if self.train == 0 {
-                self.markets = Market::new(self.currency);
-            }
-        }
         if let Some(curr) = self.candle_aggregator.next(candle)? {
             if self.candles.is_some() {
                 return Err(fxcm::Error::CandleSet);
@@ -289,7 +295,10 @@ impl Trader for MrMagoo {
                 let reward: fxcm::Result<fxcm::Reward> = self
                     .markets
                     .iter()
-                    .map(|x| x.reward(self.currency, &candles[x.get_symbol()]))
+                    .map(|x| {
+                        let ret = x.reward(self.currency, &candles[x.get_symbol()]) / self.qty;
+                        Ok(ret.to_f64().ok_or(fxcm::Error::F64(ret))? as f32)
+                    })
                     .collect();
                 let timestep = fxcm::CompleteTimestep::new(reward?, timestep);
                 self.history.try_push(timestep)?;

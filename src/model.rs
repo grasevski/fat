@@ -9,8 +9,20 @@ use tch::{
     no_grad, Device, Kind, Reduction, TchError, Tensor,
 };
 
+/// Array type for big hidden batch on the stack.
+pub type HiddenBatch = ArrayVec<f32, { cfg::BATCH * fxcm::LAYER_DIM * cfg::FEATURES }>;
+
+/// Array type for big observation batch on the stack.
+pub type ObservationBatch = ArrayVec<f32, { cfg::BATCH * cfg::WINDOW * 2 * fxcm::Symbol::N }>;
+
+/// Gradient descent algorithm.
+type Optimizer = nn::AdamW;
+
 /// Reinforcement learning agent.
 pub struct Model {
+    /// Number of epochs per update.
+    epochs: u8,
+
     /// Random number generator, for shuffling batches.
     rng: StdRng,
 
@@ -18,7 +30,7 @@ pub struct Model {
     vs: nn::VarStore,
 
     /// Gradient descent method.
-    opt: nn::Optimizer<nn::RmsProp>,
+    opt: nn::Optimizer<Optimizer>,
 
     /// Stateful time series decoder.
     rnn: nn::GRU,
@@ -31,11 +43,9 @@ pub struct Model {
 }
 
 impl Model {
-    /// Mini batch size.
-    const BATCHSIZE: usize = cfg::STEPS;
-
     /// Initializes the neural network.
     pub fn new(
+        epochs: u8,
         seed: i64,
         output: u8,
         dropout: f64,
@@ -45,7 +55,7 @@ impl Model {
         let rng = StdRng::seed_from_u64(seed.try_into()?);
         manual_seed(seed);
         let vs = nn::VarStore::new(Device::cuda_if_available());
-        let opt = nn::RmsProp::default().build(&vs, learning_rate)?;
+        let opt = Optimizer::default().build(&vs, learning_rate)?;
         let cfg = nn::RNNConfig {
             has_biases,
             num_layers: cfg::LAYERS.try_into()?,
@@ -62,6 +72,7 @@ impl Model {
         let actor = Self::predictor(&vs.root() / "actor", output)?;
         let critic = Self::predictor(&vs.root() / "critic", output)?;
         Ok(Self {
+            epochs,
             rng,
             vs,
             opt,
@@ -73,7 +84,7 @@ impl Model {
 
     /// Constructs a prediction head.
     fn predictor(path: nn::Path, output: u8) -> fxcm::Result<nn::Linear> {
-        let mut input = cfg::SEQ_LEN * cfg::FEATURES;
+        let mut input = cfg::WINDOW * cfg::FEATURES;
         if cfg::BIDIRECTIONAL {
             input <<= 1;
         }
@@ -95,21 +106,21 @@ impl Model {
     fn train(&mut self, history: &[fxcm::CompleteTimestep], actions: u8) -> fxcm::Result<()> {
         let size = [history.len().try_into()?, actions.into()];
         let state = {
-            let arr: ArrayVec<_, { Self::BATCHSIZE * fxcm::Order::MAX }> = history
+            let arr: ArrayVec<_, { cfg::BATCH * fxcm::Order::MAX }> = history
                 .iter()
                 .flat_map(|x| x.get_timestep().get_timestep().get_state(actions.into()))
                 .collect();
             self.to_gpu(arr.as_slice(), &size)?
         };
         let action = {
-            let arr: ArrayVec<_, { Self::BATCHSIZE * fxcm::Order::MAX }> = history
+            let arr: ArrayVec<_, { cfg::BATCH * fxcm::Order::MAX }> = history
                 .iter()
                 .flat_map(|x| x.get_timestep().get_action(actions.into()))
                 .collect();
             self.to_gpu(arr.as_slice(), &size)?
         };
         let reward = {
-            let arr: ArrayVec<_, { Self::BATCHSIZE * fxcm::Order::MAX }> = history
+            let arr: ArrayVec<_, { cfg::BATCH * fxcm::Order::MAX }> = history
                 .iter()
                 .flat_map(fxcm::CompleteTimestep::get_reward)
                 .collect();
@@ -121,7 +132,7 @@ impl Model {
             cfg::FEATURES.try_into()?,
         ];
         let mut hidden = if cfg::STATEFUL {
-            let arr: ArrayVec<_, { Self::BATCHSIZE * fxcm::LAYER_DIM * cfg::FEATURES }> = history
+            let arr: HiddenBatch = history
                 .iter()
                 .flat_map(|x| x.get_timestep().get_timestep().get_hidden())
                 .collect();
@@ -132,15 +143,14 @@ impl Model {
         let n = history.len().try_into()?;
         let size = [
             n,
-            cfg::SEQ_LEN.try_into()?,
+            cfg::WINDOW.try_into()?,
             2 * i64::try_from(fxcm::Symbol::N)?,
         ];
         let observation = {
-            let arr: ArrayVec<_, { Self::BATCHSIZE * cfg::SEQ_LEN * 2 * fxcm::Symbol::N }> =
-                history
-                    .iter()
-                    .flat_map(|x| x.get_timestep().get_timestep().get_observation())
-                    .collect();
+            let arr: ObservationBatch = history
+                .iter()
+                .flat_map(|x| x.get_timestep().get_timestep().get_observation())
+                .collect();
             self.to_gpu(arr.as_slice(), &size)?
         };
         let hidden = nn::GRUState(hidden.f_transpose_(0, 1)?);
@@ -176,9 +186,9 @@ impl Model {
         history: &mut [fxcm::CompleteTimestep],
         actions: u8,
     ) -> fxcm::Result<()> {
-        for _ in 0..1 {
+        for _ in 0..self.epochs {
             history.shuffle(&mut self.rng);
-            for x in history.chunks(Self::BATCHSIZE) {
+            for x in history.chunks(cfg::BATCH) {
                 self.train(x, actions)?;
             }
         }
@@ -204,11 +214,11 @@ impl Model {
         const BATCH: usize = 1;
         let size = [
             BATCH.try_into()?,
-            cfg::SEQ_LEN.try_into()?,
+            cfg::WINDOW.try_into()?,
             2 * i64::try_from(fxcm::Symbol::N)?,
         ];
         let observation = {
-            let arr: ArrayVec<_, { BATCH * cfg::SEQ_LEN * 2 * fxcm::Symbol::N }> =
+            let arr: ArrayVec<_, { BATCH * cfg::WINDOW * 2 * fxcm::Symbol::N }> =
                 timestep.get_observation().collect();
             self.to_gpu(arr.as_slice(), &size)?
         };

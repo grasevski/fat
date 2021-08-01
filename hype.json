@@ -1,0 +1,23 @@
+{
+  "t": {
+    "Categorical": 3
+  },
+  "w": {
+    "Categorical": 16
+  },
+  "n": {
+    "Categorical": 8
+  },
+  "b": {
+    "Categorical": 2
+  },
+  "f": {
+    "Categorical": 16
+  },
+  "l": {
+    "Categorical": 16
+  },
+  "i": {
+    "Categorical": 16
+  }
+}

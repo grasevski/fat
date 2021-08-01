@@ -148,35 +148,34 @@ impl<E: Exchange> Iterator for Hybrid<E> {
     type Item = FallibleEvent;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.train == 0 {
-            if self.live != 0 {
-                let ret = self.exchange.next();
-                if let Some(Ok(fxcm::Event::Candle(_))) = ret {
-                    self.live -= i32::from(self.live > 0);
-                }
-                ret
-            } else {
-                None
-            }
-        } else if !self.sim.needs_candle() {
-            self.sim.next()
-        } else if let Some(event) = self.exchange.next() {
-            match event {
-                Ok(x) => match x {
-                    fxcm::Event::Candle(candle) => {
-                        if self.train > 0 {
-                            self.train -= 1;
+        if self.sim.needs_candle() && self.train != 0 {
+            self.train -= i32::from(self.train > 0);
+            if let Some(event) = self.exchange.next() {
+                match event {
+                    Ok(x) => match x {
+                        fxcm::Event::Candle(candle) => self.sim.set_candle(candle),
+                        fxcm::Event::Order(order) => {
+                            return Some(Err(fxcm::Error::Order(order)));
                         }
-                        self.sim.set_candle(candle);
-                        self.sim.next()
+                    },
+                    Err(x) => {
+                        return Some(Err(x));
                     }
-                    fxcm::Event::Order(order) => Some(Err(fxcm::Error::Order(order))),
-                },
-                Err(x) => Some(Err(x)),
+                }
             }
-        } else {
-            self.sim.next()
         }
+        let ret = self.sim.next();
+        if ret.is_some() {
+            return ret;
+        }
+        let ret = self.exchange.next();
+        if let Some(Ok(fxcm::Event::Candle(_))) = ret {
+            if self.live == 0 {
+                return None;
+            }
+            self.live -= i32::from(self.live > 0);
+        }
+        ret
     }
 }
 

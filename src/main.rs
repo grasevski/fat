@@ -9,7 +9,8 @@ use enum_map::EnumMap;
 use mimalloc::MiMalloc;
 use reqwest::blocking::Client;
 use rust_decimal::prelude::Decimal;
-use std::io;
+use static_assertions::const_assert;
+use std::{io, mem::size_of};
 
 mod cfg;
 mod exchange;
@@ -17,6 +18,9 @@ mod fxcm;
 mod history;
 mod model;
 mod trader;
+
+const_assert!(size_of::<trader::MrMagoo>() + size_of::<model::HiddenBatch>() <= (1 << 16));
+const_assert!(size_of::<trader::MrMagoo>() + size_of::<model::ObservationBatch>() <= (1 << 16));
 
 /// A fast cross platform allocator.
 #[global_allocator]
@@ -70,21 +74,9 @@ enum Opts {
         #[clap(short, long)]
         end: Option<NaiveDate>,
 
-        /// Random number generator seed.
-        #[clap(short, long, default_value = "0")]
-        gen: i64,
-
-        /// Dropout rate.
-        #[clap(short, long, default_value = "0")]
-        prob: f64,
-
-        /// Learning rate.
-        #[clap(short, long, default_value = "1e-3")]
-        alpha: f64,
-
-        /// Whether to exclude bias parameters from GRU layers.
-        #[clap(short, long)]
-        unbiased: bool,
+        /// Autotrader specific config.
+        #[clap(flatten)]
+        cfg: trader::Cfg,
     },
 }
 
@@ -104,10 +96,7 @@ impl Opts {
                 verbose,
                 begin,
                 end,
-                gen,
-                prob,
-                alpha,
-                unbiased,
+                cfg,
             } => {
                 let (mut _real, mut _sim, mut _logging, mut _history, mut _reader) =
                     Default::default();
@@ -143,8 +132,7 @@ impl Opts {
                     exchange = _logging.as_mut().expect("logging exchange not initialized");
                 }
                 let mut dryrun = trader::Dryrun::default();
-                let mut mrmagoo =
-                    trader::MrMagoo::new(currency, qty, train, gen, prob, alpha, !unbiased)?;
+                let mut mrmagoo = trader::MrMagoo::new(currency, qty, cfg)?;
                 let trader: &mut dyn trader::Trader = if noop { &mut dryrun } else { &mut mrmagoo };
                 println!("{}", run(exchange, trader)?);
             }

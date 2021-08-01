@@ -13,11 +13,13 @@ use std::{cmp, convert::TryFrom, fmt, io, mem, num, result};
 use strum_macros::{Display, EnumString};
 use tch::TchError;
 
-const_assert!(cfg::LAYERS != 0);
-const_assert!(cfg::FEATURES != 0);
-const_assert!(cfg::SEQ_LEN != 0);
-const_assert!(cfg::STEPS != 0);
 const_assert!(!cfg::STATEFUL || !cfg::BIDIRECTIONAL);
+const_assert!(cfg::FEATURES != 0);
+const_assert!(cfg::LAYERS != 0);
+const_assert!(cfg::WINDOW != 0);
+const_assert!(cfg::ACTIONS != 0);
+const_assert!(cfg::BATCH != 0);
+const_assert!(cfg::BATCH <= cfg::ACTIONS);
 
 /// Profit and loss for each market.
 pub type Reward = ArrayVec<f32, { Order::MAX }>;
@@ -123,7 +125,7 @@ pub struct PartialTimestep {
     hidden: Hidden,
 
     /// The preceding sequence of observations.
-    observation: ArrayVec<ObservationSet, { cfg::SEQ_LEN }>,
+    observation: ArrayVec<ObservationSet, { cfg::WINDOW }>,
 }
 
 impl PartialTimestep {
@@ -164,7 +166,7 @@ impl PartialTimestep {
 
     /// Returns an iterator over the observation data.
     pub fn get_observation(&self) -> impl Iterator<Item = f32> {
-        let ret: ArrayVec<_, { cfg::SEQ_LEN * 2 * Symbol::N }> = self
+        let ret: ArrayVec<_, { cfg::WINDOW * 2 * Symbol::N }> = self
             .observation
             .iter()
             .flat_map(|x| x.values().flat_map(Observation::iter))
