@@ -26,17 +26,20 @@ rustfmt src/*
 # Show usage info
 ./target/release/fat -h
 
-# Download historical candle data
-./target/release/fat run -nv sim -r |gzip >candles.csv.gz
+# Download historical hourly candle data
+./target/release/fat run -nv sim -r |gzip >h1.csv.gz
+
+# Download historical minutely candle data
+./target/release/fat run -mnv sim -r |gzip >m1.csv.gz
 
 # Backtest on historical candle data
-gunzip <candles.csv.gz |head -1000000 |./target/release/fat run sim
+gunzip <h1.csv.gz |head -1000000 |./target/release/fat run sim
 
 # Backtest on historical candle data, using first 10K rows purely for training
-gunzip <candles.csv.gz |head -1000000 |./target/release/fat run -t 10000 sim
+gunzip <h1.csv.gz |head -1000000 |./target/release/fat run -t 10000 sim
 
 # Investigate stack dump when it crashes
-gunzip <candles.csv.gz |head -1000000 |RUST_BACKTRACE=full ./target/debug/fat run -t 10000 sim
+gunzip <h1.csv.gz |head -1000000 |RUST_BACKTRACE=full ./target/debug/fat run -t 10000 sim
 
 # Run debugger
 lldb target/debug/fat

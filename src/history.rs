@@ -15,6 +15,9 @@ pub struct History<R: Read, F: FnMut(&str) -> fxcm::Result<R>> {
     /// Optional end point of time range.
     end: Option<NaiveDate>,
 
+    /// Use minutely candle data rather than hourly.
+    minutely: bool,
+
     /// Interface to fetch historical data.
     client: F,
 
@@ -24,11 +27,16 @@ pub struct History<R: Read, F: FnMut(&str) -> fxcm::Result<R>> {
 
 impl<R: Read, F: FnMut(&str) -> fxcm::Result<R>> History<R, F> {
     /// Initializes data loader for given date range.
-    pub fn new(mut client: F, begin: NaiveDate, end: Option<NaiveDate>) -> fxcm::Result<Self> {
+    pub fn new(
+        mut client: F,
+        begin: NaiveDate,
+        end: Option<NaiveDate>,
+        minutely: bool,
+    ) -> fxcm::Result<Self> {
         let mut buf = EnumMap::default();
         for (k, (candle, loader)) in &mut buf {
             let mut l = HistoryLoader::new(begin);
-            if let Some(c) = l.next(k, begin, end, &mut client) {
+            if let Some(c) = l.next(k, begin, end, minutely, &mut client) {
                 *candle = Some(c?);
                 *loader = Some(l);
             } else {
@@ -38,6 +46,7 @@ impl<R: Read, F: FnMut(&str) -> fxcm::Result<R>> History<R, F> {
         Ok(Self {
             begin,
             end,
+            minutely,
             client,
             buf,
         })
@@ -51,8 +60,13 @@ impl<R: Read, F: FnMut(&str) -> fxcm::Result<R>> Iterator for History<R, F> {
         if let Some(candle) = self.buf.values().flat_map(|x| x.0.clone()).min() {
             let (ref mut c, ref mut l) = self.buf[candle.symbol];
             if let Some(loader) = l {
-                if let Some(x) = loader.next(candle.symbol, self.begin, self.end, &mut self.client)
-                {
+                if let Some(x) = loader.next(
+                    candle.symbol,
+                    self.begin,
+                    self.end,
+                    self.minutely,
+                    &mut self.client,
+                ) {
                     match x {
                         Ok(x) => {
                             *c = Some(x);
@@ -103,10 +117,11 @@ impl<R: Read> HistoryLoader<R> {
         symbol: fxcm::Symbol,
         begin: NaiveDate,
         end: Option<NaiveDate>,
+        minutely: bool,
         mut client: impl FnMut(&str) -> fxcm::Result<R>,
     ) -> Option<fxcm::FallibleCandle> {
         if self.rdr.is_none() {
-            const ENDPOINT: &str = "https://candledata.fxcorporate.com/m1";
+            const ENDPOINT: &str = "https://candledata.fxcorporate.com";
             self.current -= Duration::days((self.current.ordinal0() % 7).into());
             if let Some(end) = end {
                 if self.current >= end {
@@ -117,7 +132,12 @@ impl<R: Read> HistoryLoader<R> {
             let week =
                 1 + self.current.ordinal0() / 7 + u32::from(self.current.ordinal0() % 7 != 0);
             let mut url = ArrayString::<64>::new();
-            if let Err(err) = write!(&mut url, "{}/{}/{}/{}.csv.gz", ENDPOINT, symbol, year, week) {
+            let frequency = if minutely { "m1" } else { "H1" };
+            if let Err(err) = write!(
+                &mut url,
+                "{}/{}/{}/{}/{}.csv.gz",
+                ENDPOINT, frequency, symbol, year, week
+            ) {
                 return Some(Err(fxcm::Error::from(err)));
             }
             self.current += Duration::weeks(1);
@@ -164,7 +184,7 @@ impl<R: Read> HistoryLoader<R> {
             } else {
                 self.rdr = None;
                 self.empty = true;
-                self.next(symbol, begin, end, client)
+                self.next(symbol, begin, end, minutely, client)
             }
         } else {
             None

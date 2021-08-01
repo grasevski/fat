@@ -74,6 +74,10 @@ enum Opts {
         #[clap(short, long)]
         end: Option<NaiveDate>,
 
+        /// Use minutely candle data rather than hourly.
+        #[clap(short, long)]
+        minutely: bool,
+
         /// Autotrader specific config.
         #[clap(flatten)]
         cfg: trader::Cfg,
@@ -96,13 +100,14 @@ impl Opts {
                 verbose,
                 begin,
                 end,
+                minutely,
                 cfg,
             } => {
                 let (mut _real, mut _sim, mut _logging, mut _history, mut _reader) =
                     Default::default();
                 let mut exchange: &mut dyn exchange::Exchange = match cmd {
                     ExecCmd::Real { yolo } => {
-                        _real = Some(exchange::Real::new(yolo)?);
+                        _real = Some(exchange::Real::new(yolo, minutely)?);
                         _real.as_mut().expect("real exchange not initialized")
                     }
                     ExecCmd::Sim { replay } => {
@@ -112,6 +117,7 @@ impl Opts {
                                 move |url| Ok(client.get(url).send()?),
                                 begin,
                                 end,
+                                minutely,
                             );
                             _history = Some(history?);
                             _history.as_mut().expect("history not initialized")
