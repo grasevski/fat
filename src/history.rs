@@ -15,8 +15,8 @@ pub struct History<R: Read, F: FnMut(&str) -> fxcm::Result<R>> {
     /// Optional end point of time range.
     end: Option<NaiveDate>,
 
-    /// Use minutely candle data rather than hourly.
-    minutely: bool,
+    /// Candle interval.
+    frequency: fxcm::Frequency,
 
     /// Interface to fetch historical data.
     client: F,
@@ -31,12 +31,12 @@ impl<R: Read, F: FnMut(&str) -> fxcm::Result<R>> History<R, F> {
         mut client: F,
         begin: NaiveDate,
         end: Option<NaiveDate>,
-        minutely: bool,
+        frequency: fxcm::Frequency,
     ) -> fxcm::Result<Self> {
         let mut buf = EnumMap::default();
         for (k, (candle, loader)) in &mut buf {
             let mut l = HistoryLoader::new(begin);
-            if let Some(c) = l.next(k, begin, end, minutely, &mut client) {
+            if let Some(c) = l.next(k, begin, end, frequency, &mut client) {
                 *candle = Some(c?);
                 *loader = Some(l);
             } else {
@@ -46,7 +46,7 @@ impl<R: Read, F: FnMut(&str) -> fxcm::Result<R>> History<R, F> {
         Ok(Self {
             begin,
             end,
-            minutely,
+            frequency,
             client,
             buf,
         })
@@ -64,7 +64,7 @@ impl<R: Read, F: FnMut(&str) -> fxcm::Result<R>> Iterator for History<R, F> {
                     candle.symbol,
                     self.begin,
                     self.end,
-                    self.minutely,
+                    self.frequency,
                     &mut self.client,
                 ) {
                     match x {
@@ -117,30 +117,46 @@ impl<R: Read> HistoryLoader<R> {
         symbol: fxcm::Symbol,
         begin: NaiveDate,
         end: Option<NaiveDate>,
-        minutely: bool,
+        frequency: fxcm::Frequency,
         mut client: impl FnMut(&str) -> fxcm::Result<R>,
     ) -> Option<fxcm::FallibleCandle> {
         if self.rdr.is_none() {
             const ENDPOINT: &str = "https://candledata.fxcorporate.com";
-            self.current -= Duration::days((self.current.ordinal0() % 7).into());
-            if let Some(end) = end {
-                if self.current >= end {
-                    return None;
-                }
-            }
-            let year = self.current.year();
-            let week =
-                1 + self.current.ordinal0() / 7 + u32::from(self.current.ordinal0() % 7 != 0);
             let mut url = ArrayString::<64>::new();
-            let frequency = if minutely { "m1" } else { "H1" };
-            if let Err(err) = write!(
-                &mut url,
-                "{}/{}/{}/{}/{}.csv.gz",
-                ENDPOINT, frequency, symbol, year, week
-            ) {
+            if let Err(err) = if let fxcm::Frequency::Daily = frequency {
+                self.current -= Duration::days(self.current.ordinal0().into());
+                if let Some(end) = end {
+                    if self.current >= end {
+                        return None;
+                    }
+                }
+                let year = self.current.year();
+                self.current += Duration::weeks(53);
+                write!(&mut url, "{}/D1/{}/{}.csv.gz", ENDPOINT, symbol, year)
+            } else {
+                self.current -= Duration::days((self.current.ordinal0() % 7).into());
+                if let Some(end) = end {
+                    if self.current >= end {
+                        return None;
+                    }
+                }
+                let year = self.current.year();
+                let week =
+                    1 + self.current.ordinal0() / 7 + u32::from(self.current.ordinal0() % 7 != 0);
+                let frequency = if let fxcm::Frequency::Minutely = frequency {
+                    "m1"
+                } else {
+                    "H1"
+                };
+                self.current += Duration::weeks(1);
+                write!(
+                    &mut url,
+                    "{}/{}/{}/{}/{}.csv.gz",
+                    ENDPOINT, frequency, symbol, year, week
+                )
+            } {
                 return Some(Err(fxcm::Error::from(err)));
             }
-            self.current += Duration::weeks(1);
             match client(url.as_str()) {
                 Ok(res) => {
                     let rdr = Reader::from_reader(GzDecoder::new(res));
@@ -184,7 +200,7 @@ impl<R: Read> HistoryLoader<R> {
             } else {
                 self.rdr = None;
                 self.empty = true;
-                self.next(symbol, begin, end, minutely, client)
+                self.next(symbol, begin, end, frequency, client)
             }
         } else {
             None

@@ -5,12 +5,12 @@
 use chrono::NaiveDate;
 use clap::Clap;
 use csv::Reader;
-use enum_map::EnumMap;
+use enum_map::{Enum, EnumMap};
 use mimalloc::MiMalloc;
 use reqwest::blocking::Client;
 use rust_decimal::prelude::Decimal;
 use static_assertions::const_assert;
-use std::{io, mem::size_of};
+use std::{fmt::Display, io, mem::size_of};
 
 mod cfg;
 mod exchange;
@@ -74,9 +74,9 @@ enum Opts {
         #[clap(short, long)]
         end: Option<NaiveDate>,
 
-        /// Use minutely candle data rather than hourly.
-        #[clap(short, long)]
-        minutely: bool,
+        /// Candle interval.
+        #[clap(short, long, default_value = "minutely")]
+        frequency: fxcm::Frequency,
 
         /// Autotrader specific config.
         #[clap(flatten)]
@@ -100,14 +100,14 @@ impl Opts {
                 verbose,
                 begin,
                 end,
-                minutely,
+                frequency,
                 cfg,
             } => {
                 let (mut _real, mut _sim, mut _logging, mut _history, mut _reader) =
                     Default::default();
                 let mut exchange: &mut dyn exchange::Exchange = match cmd {
                     ExecCmd::Real { yolo } => {
-                        _real = Some(exchange::Real::new(yolo, minutely)?);
+                        _real = Some(exchange::Real::new(yolo, frequency)?);
                         _real.as_mut().expect("real exchange not initialized")
                     }
                     ExecCmd::Sim { replay } => {
@@ -117,7 +117,7 @@ impl Opts {
                                 move |url| Ok(client.get(url).send()?),
                                 begin,
                                 end,
-                                minutely,
+                                frequency,
                             );
                             _history = Some(history?);
                             _history.as_mut().expect("history not initialized")
@@ -150,6 +150,9 @@ impl Opts {
 /// Configuration info.
 #[derive(Clap)]
 enum LsCmd {
+    /// List all available frequencies.
+    Frequency,
+
     /// List all available currencies.
     Currency,
 
@@ -162,18 +165,19 @@ enum LsCmd {
 }
 
 impl LsCmd {
+    fn ls<T: Enum<()> + Display>() {
+        for (x, _) in EnumMap::<T, ()>::default() {
+            println!("{}", x);
+        }
+    }
+
     /// Runs the list command.
     fn run(self) {
         match self {
-            LsCmd::Currency => {
-                let currencies: EnumMap<fxcm::Currency, ()> = Default::default();
-                for (currency, _) in currencies {
-                    println!("{}", currency);
-                }
-            }
+            LsCmd::Frequency => Self::ls::<fxcm::Frequency>(),
+            LsCmd::Currency => Self::ls::<fxcm::Currency>(),
             LsCmd::Symbol { currency } => {
-                let symbols: EnumMap<fxcm::Symbol, ()> = Default::default();
-                for (symbol, _) in symbols {
+                for (symbol, _) in EnumMap::<fxcm::Symbol, ()>::default() {
                     if let Some(currency) = currency {
                         if symbol.has_currency(currency) {
                             continue;

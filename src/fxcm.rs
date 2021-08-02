@@ -21,6 +21,16 @@ const_assert!(cfg::ACTIONS != 0);
 const_assert!(cfg::BATCH != 0);
 const_assert!(cfg::BATCH <= cfg::ACTIONS);
 
+/// Candle interval.
+#[derive(Clone, Copy, Deserialize, Display, Enum, EnumString, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum Frequency {
+    Minutely,
+    Hourly,
+    Daily,
+}
+
 /// Profit and loss for each market.
 pub type Reward = ArrayVec<f32, { Order::MAX }>;
 
