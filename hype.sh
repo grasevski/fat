@@ -1,4 +1,4 @@
-#!/bin/sh -eux
+#!/bin/bash -eux
 d=1s
 while getopts ':d:t:w:n:b:f:l:i:' opt; do
 	if [ "$opt" = "d" ]; then
