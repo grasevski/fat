@@ -36,6 +36,7 @@ jobs:
   tune:
     needs: [build]
     runs-on: ubuntu-latest
+    steps:
     - run: wget https://github.com/grasevski/hype/releases/download/latest/hype
     - run: ./hype -m "$(cat hype.json)" ./hype.sh -d 1s | tee tune.csv
     - uses: actions/upload-artifact@v2
