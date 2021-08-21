@@ -1,6 +1,11 @@
 #!/bin/sh -eux
+d=1s
 while getopts ':d:t:w:n:b:f:l:i:' opt; do
-	declare $opt=$(($OPTARG+1))
+	if [ "$opt" = "d" ]; then
+		d=$OPTARG
+	else
+		declare $opt=$(($OPTARG+1))
+	fi
 done
 
 case $t in
