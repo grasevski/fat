@@ -38,6 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - run: wget https://github.com/grasevski/hype/releases/download/latest/hype
+    - run: chmod +x hype
     - run: ./hype -m "$(cat hype.json)" ./hype.sh -d 1s | tee tune.csv
     - uses: actions/upload-artifact@v2
       with: {name: tune.csv}
@@ -46,6 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - run: wget https://github.com/grasevski/hype/releases/download/latest/hype
+    - run: chmod +x hype
     - run: ./hype -m "$(cat hype.json)" ./hype.sh -d 1d | tee delay.csv
     - uses: actions/upload-artifact@v2
       with: {name: delay.csv}
