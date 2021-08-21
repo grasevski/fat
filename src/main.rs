@@ -42,7 +42,7 @@ enum Opts {
         #[clap(short, long, default_value = "1s")]
         delay: humantime::Duration,
 
-        /// Budget for each market.
+        /// Budget in base currency.
         #[clap(short, long, default_value = "1")]
         qty: Decimal,
 
@@ -76,7 +76,7 @@ enum Opts {
 
         /// Candle interval.
         #[clap(short, long, default_value = "minutely")]
-        frequency: fxcm::Frequency,
+        when: fxcm::Frequency,
 
         /// Autotrader specific config.
         #[clap(flatten)]
@@ -100,14 +100,14 @@ impl Opts {
                 verbose,
                 begin,
                 end,
-                frequency,
+                when,
                 cfg,
             } => {
                 let (mut _real, mut _sim, mut _logging, mut _history, mut _reader) =
                     Default::default();
                 let mut exchange: &mut dyn exchange::Exchange = match cmd {
                     ExecCmd::Real { yolo } => {
-                        _real = Some(exchange::Real::new(yolo, frequency)?);
+                        _real = Some(exchange::Real::new(yolo, when)?);
                         _real.as_mut().expect("real exchange not initialized")
                     }
                     ExecCmd::Sim { replay } => {
@@ -117,7 +117,7 @@ impl Opts {
                                 move |url| Ok(client.get(url).send()?),
                                 begin,
                                 end,
-                                frequency,
+                                when,
                             );
                             _history = Some(history?);
                             _history.as_mut().expect("history not initialized")
@@ -165,6 +165,7 @@ enum LsCmd {
 }
 
 impl LsCmd {
+    /// Lists all enum variants.
     fn ls<T: Enum<()> + Display>() {
         for (x, _) in EnumMap::<T, ()>::default() {
             println!("{}", x);
@@ -179,7 +180,7 @@ impl LsCmd {
             LsCmd::Symbol { currency } => {
                 for (symbol, _) in EnumMap::<fxcm::Symbol, ()>::default() {
                     if let Some(currency) = currency {
-                        if symbol.has_currency(currency) {
+                        if !symbol.has_currency(currency) {
                             continue;
                         }
                     }

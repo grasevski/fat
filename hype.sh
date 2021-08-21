@@ -41,7 +41,7 @@ for u in false true; do
 	for p in 0.0 0.5; do
 		for a in 1e-1 1e-2 1e-3 1e-4; do
 			cat <<EOF
-echo "$u,$p,$a,\$(./target/release/fat run -d 1m -t 100000 -a "$a" -p "$p" -i "$i" --unbiased="$u" sim <candles.csv)"
+echo "$u,$p,$a,\$(./target/release/fat run -d 1d -a "$a" -p "$p" -i "$i" --unbiased="$u" sim <d1.csv)"
 EOF
 		done
 	done

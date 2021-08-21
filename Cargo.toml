@@ -23,7 +23,7 @@ proptest = "*"
 proptest-derive = "*"
 rand = "*"
 reqwest = { features = ["blocking", "rustls-tls"], version = "*" }
-rust_decimal = "*"
+rust_decimal = { features = ["maths"], version = "*" }
 serde = { features = ["derive"], version = "*" }
 static_assertions = "*"
 strum = "*"

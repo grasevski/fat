@@ -4,7 +4,10 @@ use arrayvec::ArrayVec;
 use chrono::{DateTime, Utc};
 use clap::Clap;
 use enum_map::{Enum, EnumMap};
-use rust_decimal::prelude::{Decimal, One, ToPrimitive};
+use rust_decimal::{
+    prelude::{Decimal, One, ToPrimitive},
+    MathematicalOps,
+};
 use std::convert::TryInto;
 
 /// A list of orders from the trader.
@@ -49,6 +52,7 @@ struct CandleAggregator {
 }
 
 impl CandleAggregator {
+    /// Initializes the candle aggregator.
     fn new() -> fxcm::Result<Self> {
         let remaining = fxcm::Symbol::N.try_into()?;
         let (watermark, candles) = Default::default();
@@ -137,6 +141,20 @@ impl Market {
         self.symbol
     }
 
+    /// Returns the quantity placed in this market.
+    fn get_qty(&self) -> Decimal {
+        self.qty
+    }
+
+    /// Calculates how much of the budget to put towards this market.
+    fn stake(&self) -> Decimal {
+        if self.ready() {
+            self.pnl.exp()
+        } else {
+            Default::default()
+        }
+    }
+
     /// Determines whether the current orders have completed.
     fn ready(&self) -> bool {
         self.qty == Default::default()
@@ -188,7 +206,7 @@ impl Market {
     }
 }
 
-/// Do nothing trader.
+/// Reinforcement learning trader.
 pub struct MrMagoo {
     /// Latest order sequence number.
     seq: usize,
@@ -308,10 +326,19 @@ impl Trader for MrMagoo {
                 }
             }
             let timestep = self.model.act(&mut self.partial, n)?;
-            let (currency, qty) = (self.currency, self.qty);
+            let currency = self.currency;
+            let qty: Decimal = self.markets.iter().map(Market::get_qty).sum();
+            let qty = self.qty - qty;
+            let qtys: ArrayVec<Decimal, { fxcm::Order::MAX }> =
+                self.markets.iter().map(Market::stake).collect();
+            let sum: Decimal = qtys.iter().sum();
             let ret = (self.seq..)
-                .zip(timestep.action_bool(n.into()).zip(&mut self.markets))
-                .filter_map(|(i, (a, m))| m.act(i, currency, &candles[m.get_symbol()], qty, a))
+                .zip(timestep.action_bool(n.into()))
+                .zip(&mut self.markets)
+                .zip(&qtys)
+                .filter_map(|(((i, a), m), q)| {
+                    m.act(i, currency, &candles[m.get_symbol()], qty * q / sum, a)
+                })
                 .collect();
             self.timestep = Some(timestep);
             self.seq += self.markets.len();
