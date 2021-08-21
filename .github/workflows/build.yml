@@ -25,15 +25,33 @@ jobs:
     needs: [mac, windows]
     runs-on: ubuntu-latest
     steps:
-    - run: rustup target add x86_64-unknown-linux-musl
     - uses: actions/checkout@v2
     - run: cargo clippy --release
     - run: cargo test --release
-    - run: cargo build --release --target x86_64-unknown-linux-musl
+    - run: cargo build --release
     - uses: actions/upload-artifact@v2
       with:
         name: fat
-        path: target/x86_64-unknown-linux-musl/release/fat
+        path: target/release/fat
+  tune:
+    needs: [build]
+    runs-on: ubuntu-latest
+    - run: wget https://github.com/grasevski/hype/releases/download/latest/hype
+    - run: ./hype -m "$(cat hype.json)" ./hype.sh -d 1s | tee tune.csv
+    - uses: actions/upload-artifact@v2
+      with: {name: tune.csv}
+  delay:
+    needs: [build]
+    runs-on: ubuntu-latest
+    - run: wget https://github.com/grasevski/hype/releases/download/latest/hype
+    - run: ./hype -m "$(cat hype.json)" ./hype.sh -d 1d | tee delay.csv
+    - uses: actions/upload-artifact@v2
+      with: {name: delay.csv}
+  release:
+    needs: [tune, delay]
+    runs-on: ubuntu-latest
+    - uses: actions/download-artifact@v2
+      with: {name: fat}
     - uses: actions/download-artifact@v2
       with: {name: fat-mac}
     - run: mv fat fat-mac
@@ -46,8 +64,6 @@ jobs:
         automatic_release_tag: latest
         files: |
           LICENSE
-          target/x86_64-unknown-linux-musl/release/fat
+          fat
           fat-mac
           fat.exe
-    - run: wget https://github.com/grasevski/hype/releases/download/latest/hype
-    - run: ./hype -m "$(cat hype.json)" ./hype.sh
