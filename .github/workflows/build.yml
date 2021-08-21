@@ -44,6 +44,7 @@ jobs:
   delay:
     needs: [build]
     runs-on: ubuntu-latest
+    steps:
     - run: wget https://github.com/grasevski/hype/releases/download/latest/hype
     - run: ./hype -m "$(cat hype.json)" ./hype.sh -d 1d | tee delay.csv
     - uses: actions/upload-artifact@v2
@@ -51,6 +52,7 @@ jobs:
   release:
     needs: [tune, delay]
     runs-on: ubuntu-latest
+    steps:
     - uses: actions/download-artifact@v2
       with: {name: fat}
     - uses: actions/download-artifact@v2
