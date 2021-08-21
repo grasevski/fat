@@ -2,13 +2,13 @@
 use super::{cfg::ACTIONS, fxcm, model};
 use arrayvec::ArrayVec;
 use chrono::{DateTime, Utc};
-use clap::Clap;
 use enum_map::{Enum, EnumMap};
 use rust_decimal::{
     prelude::{Decimal, One, ToPrimitive},
     MathematicalOps,
 };
 use std::convert::TryInto;
+use structopt::StructOpt;
 
 /// A list of orders from the trader.
 pub type OrderList = ArrayVec<fxcm::Order, { fxcm::Order::MAX }>;
@@ -240,26 +240,26 @@ pub struct MrMagoo {
 }
 
 /// Runtime autotrader hyperparams.
-#[derive(Clap)]
+#[derive(StructOpt)]
 pub struct Cfg {
     /// Number of epochs per update.
-    #[clap(short, long, default_value = "1")]
+    #[structopt(short, long, default_value = "1")]
     iter: u8,
 
     /// Random number generator seed.
-    #[clap(short, long, default_value = "0")]
+    #[structopt(short, long, default_value = "0")]
     gen: i64,
 
     /// Dropout rate.
-    #[clap(short, long, default_value = "0")]
+    #[structopt(short, long, default_value = "0")]
     prob: f64,
 
     /// Learning rate.
-    #[clap(short, long, default_value = "1e-3")]
+    #[structopt(short, long, default_value = "1e-3")]
     alpha: f64,
 
     /// Whether to exclude bias parameters from GRU layers.
-    #[clap(short, long)]
+    #[structopt(short, long)]
     unbiased: bool,
 }
 

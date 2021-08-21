@@ -10,7 +10,6 @@ edition = "2018"
 arrayvec = "*"
 bitvec = "*"
 chrono = { features = ["serde"], version = "*" }
-clap = "3.0.0-beta.2"
 csv = "*"
 humantime = "*"
 enum-map = "*"
@@ -26,6 +25,7 @@ reqwest = { features = ["blocking", "rustls-tls"], version = "*" }
 rust_decimal = { features = ["maths"], version = "*" }
 serde = { features = ["derive"], version = "*" }
 static_assertions = "*"
+structopt = "*"
 strum = "*"
 strum_macros = "*"
 tch = "*"

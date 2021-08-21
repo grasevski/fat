@@ -3,7 +3,6 @@
 #![deny(missing_docs)]
 //! FXCM Auto Trader.
 use chrono::NaiveDate;
-use clap::Clap;
 use csv::Reader;
 use enum_map::{Enum, EnumMap};
 use mimalloc::MiMalloc;
@@ -11,6 +10,7 @@ use reqwest::blocking::Client;
 use rust_decimal::prelude::Decimal;
 use static_assertions::const_assert;
 use std::{fmt::Display, io, mem::size_of};
+use structopt::StructOpt;
 
 mod cfg;
 mod exchange;
@@ -27,7 +27,7 @@ const_assert!(size_of::<trader::MrMagoo>() + size_of::<model::ObservationBatch>(
 static GLOBAL: MiMalloc = MiMalloc;
 
 /// FXCM autotrader and backtester.
-#[derive(Clap)]
+#[derive(StructOpt)]
 enum Opts {
     /// List available settings.
     Ls(LsCmd),
@@ -35,51 +35,51 @@ enum Opts {
     /// Run autotrader.
     Run {
         /// Which environment to run.
-        #[clap(subcommand)]
+        #[structopt(subcommand)]
         cmd: ExecCmd,
 
         /// Simulated execution delay for backtesting purposes.
-        #[clap(short, long, default_value = "1s")]
+        #[structopt(short, long, default_value = "1s")]
         delay: humantime::Duration,
 
         /// Budget in base currency.
-        #[clap(short, long, default_value = "1")]
+        #[structopt(short, long, default_value = "1")]
         qty: Decimal,
 
         /// Base currency to be eventually settled.
-        #[clap(short, long, default_value = "USD")]
+        #[structopt(short, long, default_value = "USD")]
         currency: fxcm::Currency,
 
         /// Number of iterations to simulate.
-        #[clap(short, long, default_value = "0")]
+        #[structopt(short, long, default_value = "0")]
         train: i32,
 
         /// Number of iterations to run on live exchange.
-        #[clap(short, long, default_value = "-1")]
+        #[structopt(short, long, default_value = "-1")]
         live: i32,
 
         /// Dont send any orders.
-        #[clap(short, long)]
+        #[structopt(short, long)]
         noop: bool,
 
         /// Log candles to stdout.
-        #[clap(short, long)]
+        #[structopt(short, long)]
         verbose: bool,
 
         /// Start date for historical data.
-        #[clap(short, long, default_value = "2012-01-01")]
+        #[structopt(short, long, default_value = "2012-01-01")]
         begin: NaiveDate,
 
         /// End date for historical data.
-        #[clap(short, long)]
+        #[structopt(short, long)]
         end: Option<NaiveDate>,
 
         /// Candle interval.
-        #[clap(short, long, default_value = "minutely")]
+        #[structopt(short, long, default_value = "minutely")]
         when: fxcm::Frequency,
 
         /// Autotrader specific config.
-        #[clap(flatten)]
+        #[structopt(flatten)]
         cfg: trader::Cfg,
     },
 }
@@ -148,7 +148,7 @@ impl Opts {
 }
 
 /// Configuration info.
-#[derive(Clap)]
+#[derive(StructOpt)]
 enum LsCmd {
     /// List all available frequencies.
     Frequency,
@@ -159,7 +159,7 @@ enum LsCmd {
     /// List all available symbols.
     Symbol {
         /// Filter by currency.
-        #[clap(short, long)]
+        #[structopt(short, long)]
         currency: Option<fxcm::Currency>,
     },
 }
@@ -192,19 +192,19 @@ impl LsCmd {
 }
 
 /// Run the autotrader in the specified environment.
-#[derive(Clap)]
+#[derive(StructOpt)]
 enum ExecCmd {
     /// Production environment.
     Real {
         /// Whether to run against the live environment.
-        #[clap(short, long)]
+        #[structopt(short, long)]
         yolo: bool,
     },
 
     /// Run against backtester.
     Sim {
         /// Run against historical data.
-        #[clap(short, long)]
+        #[structopt(short, long)]
         replay: bool,
     },
 }
@@ -229,5 +229,5 @@ fn run(
 
 /// Configures and runs the backtester and or exchange.
 fn main() -> fxcm::Result<()> {
-    Opts::parse().run()
+    Opts::from_args().run()
 }
