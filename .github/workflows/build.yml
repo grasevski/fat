@@ -30,16 +30,14 @@ jobs:
     - run: cargo test --release
     - run: cargo build --release
     - uses: actions/upload-artifact@v2
-      with:
-        name: fat
-        path: target/release/fat
+      with: {name: fat, path: target/release/fat}
   tune:
     needs: [build]
     runs-on: ubuntu-latest
     steps:
     - run: wget https://github.com/grasevski/hype/releases/download/latest/hype
     - run: chmod +x hype
-    - run: ./hype -m "$(cat hype.json)" ./hype.sh -d 1s | tee tune.csv
+    - run: ./hype -m "$(cat hype.json)" -- ./hype.sh -d 1s | tee tune.csv
     - uses: actions/upload-artifact@v2
       with: {name: tune.csv}
   delay:
@@ -48,7 +46,7 @@ jobs:
     steps:
     - run: wget https://github.com/grasevski/hype/releases/download/latest/hype
     - run: chmod +x hype
-    - run: ./hype -m "$(cat hype.json)" ./hype.sh -d 1d | tee delay.csv
+    - run: ./hype -m "$(cat hype.json)" -- ./hype.sh -d 1d | tee delay.csv
     - uses: actions/upload-artifact@v2
       with: {name: delay.csv}
   release:
@@ -62,6 +60,10 @@ jobs:
     - run: mv fat fat-mac
     - uses: actions/download-artifact@v2
       with: {name: fat.exe}
+    - uses: actions/download-artifact@v2
+      with: {name: tune.csv}
+    - uses: actions/download-artifact@v2
+      with: {name: delay.csv}
     - uses: marvinpinto/action-automatic-releases@latest
       if: github.ref == 'refs/heads/main'
       with:
@@ -72,3 +74,5 @@ jobs:
           fat
           fat-mac
           fat.exe
+          tune.csv
+          delay.csv
