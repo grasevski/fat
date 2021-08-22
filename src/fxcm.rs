@@ -684,7 +684,7 @@ impl Market {
 
 #[cfg(test)]
 mod tests {
-    use proptest::prelude::{proptest, prop_assert, prop_assert_eq};
+    use proptest::prelude::{prop_assert, prop_assert_eq, proptest};
     use rust_decimal::prelude::{Decimal, One};
 
     proptest! {
@@ -706,7 +706,7 @@ mod tests {
             prop_assert_eq!(market.pnl(currency), Default::default());
             market.trade(&mut order);
             if bid == ask {
-                prop_assert_eq!(market.pnl(currency), Default::default());
+                prop_assert_eq!(market.pnl(currency).round_dp(10), Default::default());
             } else {
                 prop_assert!(market.pnl(currency) < Default::default());
             }
