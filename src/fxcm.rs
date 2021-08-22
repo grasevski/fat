@@ -393,7 +393,7 @@ pub enum Error {
     Order(Order),
 
     /// Failed to parse timestamp.
-    ParseError(ParseError),
+    Parse(ParseError),
 
     /// HTTP request failed.
     Reqwest(reqwest::Error),
@@ -458,7 +458,7 @@ impl From<Order> for Error {
 
 impl From<ParseError> for Error {
     fn from(error: ParseError) -> Self {
-        Self::ParseError(error)
+        Self::Parse(error)
     }
 }
 
