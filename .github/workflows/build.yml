@@ -4,7 +4,11 @@ on:
   push: {branches: [main]}
   pull_request: {branches: [main]}
 
-env: {CARGO_TERM_COLOR: always}
+env:
+  CARGO_TERM_COLOR: always
+  LIBTORCH_URL: https://download.pytorch.org/libtorch/cpu/libtorch-shared-with-deps-1.9.0%2Bcpu.zip
+  LIBTORCH_DST: libtorch-shared-with-deps-1.9.0+cpu.zip
+  HYPE_URL: https://github.com/grasevski/hype/releases/download/latest/hype
 
 jobs:
   mac:
@@ -26,9 +30,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-    - run: wget https://download.pytorch.org/libtorch/cpu/libtorch-shared-with-deps-1.9.0%2Bcpu.zip
-    - run: unzip libtorch-shared-with-deps-1.9.0+cpu.zip
-    - run: LIBTORCH="$(pwd)/libtorch" LD_LIBRARY_PATH="$(pwd)/libtorch/lib/$LD_LIBRARY_PATH" ./build.sh
+    - run: wget "$LIBTORCH_URL"
+    - run: unzip "$LIBTORCH_DST"
+    - run: LIBTORCH="$(pwd)/libtorch" LD_LIBRARY_PATH="$(pwd)/libtorch/lib:$LD_LIBRARY_PATH" ./build.sh
     - uses: actions/upload-artifact@v2
       with: {name: fat, path: target/release/fat}
   tune:
@@ -36,11 +40,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-    - run: wget https://download.pytorch.org/libtorch/cpu/libtorch-shared-with-deps-1.9.0%2Bcpu.zip
-    - run: unzip libtorch-shared-with-deps-1.9.0+cpu.zip
-    - run: wget https://github.com/grasevski/hype/releases/download/latest/hype
+    - run: wget "$LIBTORCH_URL"
+    - run: unzip "$LIBTORCH_DST"
+    - run: wget "$HYPE_URL"
     - run: chmod +x hype
-    - run: LIBTORCH="$(pwd)/libtorch" LD_LIBRARY_PATH="$(pwd)/libtorch/lib/$LD_LIBRARY_PATH" ./hype -m "$(cat hype.json)" -- ./hype.sh -d 1s | tee tune.csv
+    - run: LIBTORCH="$(pwd)/libtorch" LD_LIBRARY_PATH="$(pwd)/libtorch/lib:$LD_LIBRARY_PATH" ./hype -m "$(cat hype.json)" -- ./hype.sh -d 1s | tee tune.csv
     - uses: actions/upload-artifact@v2
       with: {name: tune.csv}
   delay:
@@ -48,11 +52,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-    - run: wget https://download.pytorch.org/libtorch/cpu/libtorch-shared-with-deps-1.9.0%2Bcpu.zip
-    - run: unzip libtorch-shared-with-deps-1.9.0+cpu.zip
-    - run: wget https://github.com/grasevski/hype/releases/download/latest/hype
+    - run: wget "$LIBTORCH_URL"
+    - run: unzip "$LIBTORCH_DST"
+    - run: wget "$HYPE_URL"
     - run: chmod +x hype
-    - run: LIBTORCH="$(pwd)/libtorch" LD_LIBRARY_PATH="$(pwd)/libtorch/lib/$LD_LIBRARY_PATH" ./hype -m "$(cat hype.json)" -- ./hype.sh -d 1d | tee delay.csv
+    - run: LIBTORCH="$(pwd)/libtorch" LD_LIBRARY_PATH="$(pwd)/libtorch/lib:$LD_LIBRARY_PATH" ./hype -m "$(cat hype.json)" -- ./hype.sh -d 1d | tee delay.csv
     - uses: actions/upload-artifact@v2
       with: {name: delay.csv}
   release:
