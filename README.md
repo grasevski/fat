@@ -2,9 +2,9 @@
 FXCM Autotrader
 
 Dependencies:
- * Rust
- * Torch bindings (see `tch-rs` project for installation instructions)
- * Hype for hyperparam tuning
+ * [rust](https://www.rust-lang.org/)
+ * [torch](https://pytorch.org/) bindings (see [tch-rs](https://github.com/LaurentMazare/tch-rs) project for installation instructions)
+ * [hype](https://github.com/grasevski/hype) for hyperparam tuning
 
 Usage:
 ```sh
