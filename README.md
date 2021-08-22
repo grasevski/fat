@@ -8,17 +8,8 @@ Dependencies:
 
 Usage:
 ```sh
-# Build debug executable
-cargo build
-
-# Build release executable
-cargo build --release
-
-# Run tests
-cargo test
-
-# Run lint
-cargo clippy
+# Run build and tests
+./build.sh
 
 # Format code
 rustfmt src/*
@@ -60,7 +51,8 @@ lldb target/debug/fat
 ./target/release/fat ls symbol -c AUD
 
 # Hyperparam tuning
-(time ./tune.sh) >results.csv 2>tune.log
+(time hype -m "$(cat hype.json)" -- ./hype.sh -d 1s) >results.csv 2>tune.log
+
 ```
 
 Configuration of the trader (hyperparams etc) is done via command line flags as well as editing `src/cfg.rs` and recompiling.
