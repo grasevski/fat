@@ -684,7 +684,7 @@ impl Market {
 
 #[cfg(test)]
 mod tests {
-    use proptest::prelude::proptest;
+    use proptest::prelude::{proptest, prop_assert, prop_assert_eq};
     use rust_decimal::prelude::{Decimal, One};
 
     proptest! {
@@ -703,12 +703,12 @@ mod tests {
             let mut order = super::Order::new(id.into(), symbol, side, qty);
             let (b, q) = symbol.currencies();
             let currency = if base {b} else {q};
-            assert_eq!(market.pnl(currency), Default::default());
+            prop_assert_eq!(market.pnl(currency), Default::default());
             market.trade(&mut order);
             if bid == ask {
-                assert_eq!(market.pnl(currency), Default::default());
+                prop_assert_eq!(market.pnl(currency), Default::default());
             } else {
-                assert!(market.pnl(currency) < Default::default());
+                prop_assert!(market.pnl(currency) < Default::default());
             }
             order.side = match order.side {
                 super::Side::Bid => super::Side::Ask,
@@ -716,9 +716,9 @@ mod tests {
             };
             market.trade(&mut order);
             if bid == ask {
-                assert_eq!(market.pnl(currency), Default::default());
+                prop_assert_eq!(market.pnl(currency), Default::default());
             } else {
-                assert!(market.pnl(currency) < Default::default());
+                prop_assert!(market.pnl(currency) < Default::default());
             }
         }
     }
