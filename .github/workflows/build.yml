@@ -65,6 +65,7 @@ jobs:
     needs: [tune, delay]
     runs-on: ubuntu-latest
     steps:
+    - uses: actions/checkout@v2
     - uses: actions/download-artifact@v2
       with: {name: fat-mac}
     - run: mv fat fat-mac
@@ -84,7 +85,7 @@ jobs:
         repo_token: "${{ secrets.GITHUB_TOKEN }}"
         automatic_release_tag: latest
         files: |
-          LICENSE.txt
+          LICENSE
           fat
           fat-mac
           fat.exe
