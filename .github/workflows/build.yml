@@ -36,7 +36,7 @@ jobs:
     - uses: actions/upload-artifact@v2
       with: {name: fat, path: target/release/fat}
     - uses: actions/download-artifact@v2
-      with: {name: score.csv}
+      with: {name: score.json}
   tune:
     needs: [build]
     runs-on: ubuntu-latest
@@ -73,7 +73,7 @@ jobs:
     - uses: actions/download-artifact@v2
       with: {name: fat.exe}
     - uses: actions/download-artifact@v2
-      with: {name: score.csv}
+      with: {name: score.json}
     - uses: actions/download-artifact@v2
       with: {name: tune.csv}
     - uses: actions/download-artifact@v2
