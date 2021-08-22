@@ -36,7 +36,7 @@ jobs:
     - uses: actions/upload-artifact@v2
       with: {name: fat, path: target/release/fat}
     - uses: actions/upload-artifact@v2
-      with: {name: score.json}
+      with: {name: score.json, path: score.json}
   tune:
     needs: [build]
     runs-on: ubuntu-latest
@@ -48,7 +48,7 @@ jobs:
     - run: chmod +x hype
     - run: LIBTORCH="$(pwd)/libtorch" LD_LIBRARY_PATH="$(pwd)/libtorch/lib:$LD_LIBRARY_PATH" ./hype -m "$(cat hype.json)" -- ./hype.sh -d 1s | tee tune.csv
     - uses: actions/upload-artifact@v2
-      with: {name: tune.csv}
+      with: {name: tune.csv, path: tune.csv}
   delay:
     needs: [build]
     runs-on: ubuntu-latest
@@ -60,7 +60,7 @@ jobs:
     - run: chmod +x hype
     - run: LIBTORCH="$(pwd)/libtorch" LD_LIBRARY_PATH="$(pwd)/libtorch/lib:$LD_LIBRARY_PATH" ./hype -m "$(cat hype.json)" -- ./hype.sh -d 1d | tee delay.csv
     - uses: actions/upload-artifact@v2
-      with: {name: delay.csv}
+      with: {name: delay.csv, path: delay.csv}
   release:
     needs: [tune, delay]
     runs-on: ubuntu-latest
